@@ -1,0 +1,32 @@
+{
+    "family": "tryan-fargate-flask-app", 
+    "networkMode": "awsvpc", 
+    "containerDefinitions": [
+        {
+            "name": "flask-app", 
+            "image": "#AWSACCOUNTID#.dkr.ecr.us-west-2.amazonaws.com/tryan/ecs-fargate-demo:latest", 
+            "essential": true,
+            "portMappings": [
+                {
+                  "containerPort": 8080,
+                  "protocol": "tcp"
+                }
+              ],
+            "logConfiguration": {
+                "logDriver": "awslogs",
+                "options": {
+                    "awslogs-group": "tryan-fargate-flask-app",
+                    "awslogs-region": "us-west-2",
+                    "awslogs-create-group": "true",
+                    "awslogs-stream-prefix": "tryan-fargate-flask-app"
+                }
+            }
+        }
+    ], 
+    "requiresCompatibilities": [
+        "FARGATE"
+    ], 
+    "cpu": "256", 
+    "memory": "512",
+    "executionRoleArn": "arn:aws:iam::#AWSACCOUNTID#:role/ECSTaskExecutionRole"
+}
