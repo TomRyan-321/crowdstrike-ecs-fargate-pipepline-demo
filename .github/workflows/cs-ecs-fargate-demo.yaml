@@ -20,16 +20,6 @@ jobs:
       GITHUB_SHA: ${{ github.sha }}
 
     steps:
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v1
-      with:
-        role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID}}:role/${{ secrets.ROLE_NAME }}
-        role-session-name: ${{ secrets.ROLE_NAME }}
-        aws-region: us-west-2
-
-    - name: ECR Login
-      uses: aws-actions/amazon-ecr-login@v1  
-
     - name: Checkout
       uses: actions/checkout@v3
 
@@ -54,6 +44,16 @@ jobs:
       run: |
         jq '.' /tmp/report.json
 
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+        role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID}}:role/${{ secrets.ROLE_NAME }}
+        role-session-name: ${{ secrets.ROLE_NAME }}
+        aws-region: us-west-2
+
+    - name: ECR Login
+      uses: aws-actions/amazon-ecr-login@v1  
+  
     - name: Push image to AWS ECR
       run: |
         docker push $ECR_REGISTRY/$ECR_REPO:latest
