@@ -1,7 +1,12 @@
 name: CrowdStrike ECS Fargate Demo
 
 on:
-  workflow_dispatch
+  ## scheduled job at 5:30 UTC every sunday
+  schedule:
+    - cron: '30 5 * * 0'
+  ## manual trigger
+  # workflow_dispatch
+  ## on push
   # push:
   #   branches: [ main ]
 
