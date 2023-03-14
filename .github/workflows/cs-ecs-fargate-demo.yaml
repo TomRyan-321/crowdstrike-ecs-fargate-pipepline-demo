@@ -51,7 +51,7 @@ jobs:
         jq '.' /tmp/report.json
 
     - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v1
+      uses: aws-actions/configure-aws-credentials@v2
       with:
         role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID}}:role/${{ secrets.ROLE_NAME }}
         role-session-name: ${{ secrets.ROLE_NAME }}
