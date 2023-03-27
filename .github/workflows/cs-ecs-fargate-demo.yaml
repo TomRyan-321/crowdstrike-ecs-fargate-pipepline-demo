@@ -33,7 +33,7 @@ jobs:
         docker build -t $ECR_REGISTRY/$ECR_REPO:$GITHUB_SHA -t $ECR_REGISTRY/$ECR_REPO:latest .
 
     - name: Scan Container Image with CrowdStrike
-      uses: CrowdStrike/container-image-scan-action@v0.8
+      uses: CrowdStrike/container-image-scan-action@v0.9
       with:
         container_repository: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO }}
         container_tag: ${{ env.GITHUB_SHA }}
