@@ -20,8 +20,8 @@ jobs:
 
     env:
       ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID}}.dkr.ecr.us-west-2.amazonaws.com
-      FALCON_IMAGE: tryan/falcon-sensor:6.51.0-3401.container.x86_64.Release.US-1
-      ECR_REPO: tryan/ecs-fargate-demo
+      FALCON_IMAGE: ecs-pipeline-demo/falcon-sensor:6.53.0-3601.container.x86_64.Release.US-1
+      ECR_REPO: ecs-pipeline-demo/app-images
       GITHUB_SHA: ${{ github.sha }}
 
     steps:
@@ -68,7 +68,8 @@ jobs:
       run: |
         docker pull $ECR_REGISTRY/$FALCON_IMAGE
 
-    - name: Patch ECS Task Defintion with CrowdStrike Falcon ECS Task Definition Patching utility
+    # Patch ECS Task Definition Format (sed used to prevent commiting AWS Account ID)
+    - name: Patch ECS Task Defintion with CrowdStrike Falcon ECS Patching utility
       run: |
         sed -i 's/#AWSACCOUNTID#/${{ secrets.AWS_ACCOUNT_ID }}/g' taskdefinition.json
         docker run \
@@ -79,7 +80,30 @@ jobs:
         -pulltoken $(echo "{\"auths\":{\"${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-west-2.amazonaws.com\":{\"auth\":\"$(echo AWS:$(aws ecr get-login-password)|base64 -w 0)\"}}}" | base64 -w 0) \
         -ecs-spec-file /root/taskdefinition.json > taskdefinitionwithfalcon.json
         cat taskdefinitionwithfalcon.json
-        
+
     - name: Upload CrowdStrike Falcon Patched ECS Task Definition to ECS
       run: |
         aws ecs register-task-definition --cli-input-json file://taskdefinitionwithfalcon.json 1>/dev/null
+    
+    # Patch CloudFormation Format Sample using Parameters for Image URI (Requires Falcon Container 6.53+)
+    - name: Patch CloudFormation with CrowdStrike Falcon ECS Patching utility
+      run: |
+        docker run \
+        --mount type=bind,source=$(pwd)/cloudformation.yaml,target=/root/cloudformation.yaml \
+        --rm $ECR_REGISTRY/$FALCON_IMAGE \
+        -cid ${{ secrets.FALCON_CID }} \
+        -image $ECR_REGISTRY/$FALCON_IMAGE \
+        -pulltoken $(echo "{\"auths\":{\"${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-west-2.amazonaws.com\":{\"auth\":\"$(echo AWS:$(aws ecr get-login-password)|base64 -w 0)\"}}}" | base64 -w 0) \
+        -cloudformationParams "ParameterKey=AppImagePath,ParameterValue=${ECR_REGISTRY}/${ECR_REPO}:latest" \
+        -ecs-spec-file /root/cloudformation.yaml > cloudformationwithfalcon.yaml
+        cat cloudformationwithfalcon.yaml
+        
+    - name: Create CloudFormation Change Set
+      run: |
+        aws cloudformation create-change-set \
+        --stack-name crowdstrike-ecs-fargate-demo \
+        --change-set-type CREATE \
+        --change-set-name "crowdstrike-ecs-fargate-demo-commit-${{ env.GITHUB_SHA }}" \
+        --template-body file://cloudformationwithfalcon.yaml \
+        --parameters "ParameterKey=AppImagePath,ParameterValue=${ECR_REGISTRY}/${ECR_REPO}:latest" \
+        --capabilities CAPABILITY_IAM

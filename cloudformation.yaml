@@ -1,0 +1,91 @@
+Description: Sample template for creating a single container ECS Task Definition for a Fargate Application with Falcon Container sensor included.
+Parameters:
+  AppName:
+    Type: String
+    Default: demo-app
+    Description: Logical name for application / container
+  AppImagePath:
+    Type: String
+    Description: The full container image path including tag value for the application container image
+  AppContainerPort:
+    Type: Number
+    Description: Container port to expose
+    Default: 8080
+  TaskCPU:
+    Type: Number
+    Description: Amount of CPU to allocate to the task definition
+    Default: 256
+    AllowedValues:
+      - 256
+      - 512
+      - 1024
+      - 2048
+      - 4096
+  TaskMemory:
+    Type: Number
+    Description: Amount of Memory to allocate to task definition
+    Default: 512
+    AllowedValues:
+      - 512
+      - 1024
+      - 2048
+      - 3072
+      - 4096
+      - 5120
+      - 6144
+      - 7168
+      - 8192
+      - 9216
+      - 10240
+      - 11264
+      - 12288
+      - 13312
+      - 14336
+      - 15360
+      - 16384
+      - 17408
+      - 18432
+      - 19456
+      - 20480
+      - 21504
+      - 22528
+      - 23552
+      - 24576
+      - 25600
+      - 26624
+      - 27648
+      - 28672
+      - 29696
+      - 30720
+
+Resources:
+  ECSTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      ContainerDefinitions:
+        - Name: !Ref AppName
+          Image: !Ref AppImagePath
+          Essential: true
+          PortMappings:
+            - ContainerPort: !Ref AppContainerPort
+              Protocol: tcp
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: !Ref AppName
+      NetworkMode: awsvpc
+      ExecutionRoleArn: !Sub "arn:aws:iam::${AWS::AccountId}:role/ECSTaskExecutionRole"
+      Cpu: !Ref TaskCPU
+      Memory: !Ref TaskMemory
+      RuntimePlatform:
+        CpuArchitecture: X86_64
+        OperatingSystemFamily: LINUX
+      RequiresCompatibilities:
+        - FARGATE
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "ecs-fargate-pipeline-${AppName}"

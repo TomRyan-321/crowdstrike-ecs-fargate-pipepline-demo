@@ -1,10 +1,10 @@
 {
-    "family": "tryan-fargate-flask-app", 
+    "family": "ecs-pipeline-demo-fargate-demo-app", 
     "networkMode": "awsvpc", 
     "containerDefinitions": [
         {
-            "name": "flask-app", 
-            "image": "#AWSACCOUNTID#.dkr.ecr.us-west-2.amazonaws.com/tryan/ecs-fargate-demo:latest", 
+            "name": "demo-app", 
+            "image": "#AWSACCOUNTID#.dkr.ecr.us-west-2.amazonaws.com/ecs-pipeline-demo/app-images:latest", 
             "essential": true,
             "portMappings": [
                 {
@@ -15,10 +15,10 @@
             "logConfiguration": {
                 "logDriver": "awslogs",
                 "options": {
-                    "awslogs-group": "tryan-fargate-flask-app",
+                    "awslogs-group": "ecs-fargate-pipeline-demo-app",
                     "awslogs-region": "us-west-2",
                     "awslogs-create-group": "true",
-                    "awslogs-stream-prefix": "tryan-fargate-flask-app"
+                    "awslogs-stream-prefix": "demo-app"
                 }
             }
         }
