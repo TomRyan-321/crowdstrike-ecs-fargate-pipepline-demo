@@ -7,7 +7,11 @@ The Actions workflow demo [file](.github/workflows/cs-ecs-fargate-demo.yaml) doe
  - Checks out a copy of this repository
  - Builds and tags the Dockerfile
  - Scans the resulting image with CrowdStrike container image scanner service to check for Vulnerabilities/Malware/Secrets
- - Runs the CrowdStrike ECS Fargate patching utility which is built into the Falcon Container sensor, 2 examples are provided. First for ECS Task Definition JSON format, second for a CloudFormation template which uses Parameters to specify the container image URI. 
+ - Logs into AWS & ECR
+ - Pushes the container image which was built to ECR
+ - Pulls a copy of the Falcon Container image to perform the patching steps
+ - Sample 1 - Patch an ECS Task definition JSON schema file [taskdefinition.json](taskdefinition.json) then uploads to patch definition to the ECS service using the `aws ecs register-task-definition` command syntax
+ - Sample 2 - Patch an AWS CloudFormation template [cloudformation.yaml](cloudformation.yaml) then uploads the modified templates to the AWS CloudFormation service using the `aws cloudformation create-change-set` command syntax
 
 Both methods injects the additional resources CrowdStrike requires which includes the following with each Task/ContainerDefinition within the templates:
  - Adds additional volumes for CrowdStrike resources
