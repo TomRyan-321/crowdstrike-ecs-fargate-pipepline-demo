@@ -12,6 +12,7 @@
                   "protocol": "tcp"
                 }
               ],
+            "readonlyRootFilesystem": true,
             "logConfiguration": {
                 "logDriver": "awslogs",
                 "options": {

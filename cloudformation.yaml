@@ -69,6 +69,7 @@ Resources:
           PortMappings:
             - ContainerPort: !Ref AppContainerPort
               Protocol: tcp
+          ReadonlyRootFilesystem: true
           LogConfiguration:
             LogDriver: awslogs
             Options:
