@@ -4,11 +4,11 @@ on:
   ## scheduled job at 5:30 UTC every sunday
   schedule:
     - cron: '30 5 * * 0'
-  ## manual trigger
-  # workflow_dispatch
   ## on push
   push:
     branches: [ main ]
+  ## manual trigger
+  workflow_dispatch:
 
 permissions:
       id-token: write
