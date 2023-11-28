@@ -13,6 +13,7 @@ on:
 permissions:
       id-token: write
       contents: read
+      security-events: write
 
 jobs:
   crowdstrike-ecs-fargate-demo:
@@ -23,10 +24,38 @@ jobs:
       FALCON_IMAGE: ecs-pipeline-demo/falcon-sensor:6.57.0-4001.container.x86_64.Release.US-1
       ECR_REPO: ecs-pipeline-demo/app-images
       GITHUB_SHA: ${{ github.sha }}
+      FCS_IAC_ZIP: fcs_0.34.0_Linux_x86_64.tar.gz
 
     steps:
     - name: Checkout
       uses: actions/checkout@v3
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID}}:role/${{ secrets.ROLE_NAME }}
+        role-session-name: ${{ secrets.ROLE_NAME }}
+        aws-region: us-west-2
+
+    - name: Scan repository with CrowdStrike FCS IAC Scanner
+      run: |
+        aws s3api get-object --bucket ${{ secrets.UTILITIESBUCKETNAME }} --key ${{ env.FCS_IAC_ZIP }} ${{ env.FCS_IAC_ZIP }}
+        tar xvzf ${{ env.FCS_IAC_ZIP }}
+        chmod +x fcs
+        ./fcs iac scan \
+        --fail-on "high=50,medium=50,low=50,info=50" \
+        --report-formats sarif \
+        --output-path $PWD \
+        --path $PWD | tee scansummary.txt
+        SARIFFILE=$(grep 'Results saved to file:' scansummary.txt | sed 's/.*file: //')
+        jq '.runs[].tool.driver.informationUri = "https://www.crowdstrike.com"' $SARIFFILE > results.sarif
+
+
+    - name: Upload SARIF file
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: results.sarif
+        category: crowdstrike-fcs-iac-scanner
 
     - name: Docker build & tag image
       run: |
@@ -50,16 +79,9 @@ jobs:
       run: |
         jq '.' /tmp/report.json
 
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v2
-      with:
-        role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID}}:role/${{ secrets.ROLE_NAME }}
-        role-session-name: ${{ secrets.ROLE_NAME }}
-        aws-region: us-west-2
-
     - name: ECR Login
       uses: aws-actions/amazon-ecr-login@v1  
-  
+
     - name: Push image to AWS ECR
       run: |
         docker push $ECR_REGISTRY/$ECR_REPO:latest
