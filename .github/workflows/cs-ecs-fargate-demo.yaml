@@ -80,7 +80,7 @@ jobs:
         jq '.' /tmp/report.json
 
     - name: ECR Login
-      uses: aws-actions/amazon-ecr-login@v1  
+      uses: aws-actions/amazon-ecr-login@v2
 
     - name: Push image to AWS ECR
       run: |
