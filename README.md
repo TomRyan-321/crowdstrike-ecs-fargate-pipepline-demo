@@ -5,6 +5,7 @@ This repository is used to demo building a dockerized application intended to be
 
 The Actions workflow demo [file](.github/workflows/cs-ecs-fargate-demo.yaml) does the following: 
  - Checks out a copy of this repository
+ - Scans the repository with the Falcon Cloud Security Infrastructure as Code Scanner and uploads the resulting SARIF file
  - Builds and tags the Dockerfile
  - Scans the resulting image with CrowdStrike container image scanner service to check for Vulnerabilities/Malware/Secrets
  - Logs into AWS & ECR
