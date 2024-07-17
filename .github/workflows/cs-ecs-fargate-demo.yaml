@@ -2,25 +2,25 @@ name: CrowdStrike ECS Fargate Demo
 
 on:
   ## scheduled job at 5:30 UTC every sunday
-  schedule:
-    - cron: '30 5 * * 0'
+  # schedule:
+  #   - cron: '30 5 * * 0'
   ## on push
   push:
     branches: [ main ]
   ## manual trigger
   workflow_dispatch:
 
-permissions:
-      id-token: write
-      contents: read
-      security-events: write
+# permissions:
+#       id-token: write
+#       contents: read
+#       security-events: write
 
 jobs:
   crowdstrike-ecs-fargate-demo:
     runs-on: ubuntu-latest
 
     env:
-      ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID}}.dkr.ecr.us-west-2.amazonaws.com
+      ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID}}.dkr.ecr.us-east-1.amazonaws.com
       FALCON_IMAGE: ecs-pipeline-demo/falcon-sensor:7.10.0-4906.container.x86_64.Release.US-1
       ECR_REPO: ecs-pipeline-demo/app-images
       GITHUB_SHA: ${{ github.sha }}
@@ -33,100 +33,22 @@ jobs:
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v2
       with:
-        role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID}}:role/${{ secrets.ROLE_NAME }}
-        role-session-name: ${{ secrets.ROLE_NAME }}
-        aws-region: us-west-2
-
-    - name: Scan repository with CrowdStrike FCS IAC Scanner
-      run: |
-        aws s3api get-object --bucket ${{ secrets.UTILITIESBUCKETNAME }} --key ${{ env.FCS_IAC_ZIP }} ${{ env.FCS_IAC_ZIP }}
-        tar xvzf ${{ env.FCS_IAC_ZIP }}
-        chmod +x fcs
-        ./fcs iac scan \
-        --fail-on "high=50,medium=50,low=50,info=50" \
-        --report-formats sarif \
-        --output-path $PWD \
-        --path $PWD | tee scansummary.txt
-        SARIFFILE=$(grep 'Results saved to file:' scansummary.txt | sed 's/.*file: //')
-        jq '.runs[].tool.driver.informationUri = "https://www.crowdstrike.com"' $SARIFFILE > results.sarif
-
-
-    - name: Upload SARIF file
-      if: always()
-      uses: github/codeql-action/upload-sarif@v2
-      with:
-        sarif_file: results.sarif
-        category: crowdstrike-fcs-iac-scanner
-
-    - name: Docker build & tag image
-      run: |
-        docker build -t $ECR_REGISTRY/$ECR_REPO:$GITHUB_SHA -t $ECR_REGISTRY/$ECR_REPO:latest .
-
-    - name: Scan Container Image with CrowdStrike
-      uses: CrowdStrike/container-image-scan-action@main
-      with:
-        container_repository: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO }}
-        container_tag: ${{ env.GITHUB_SHA }}
-        crowdstrike_region: us-1
-        crowdstrike_score: 5000
-        retry_count: 30
-      env:
-        FALCON_CLIENT_SECRET: ${{ secrets.FALCON_CLIENT_SECRET }}
-        FALCON_CLIENT_ID: ${{ secrets.FALCON_CLIENT_ID }}
-        JSON_REPORT: /tmp/report.json
-
-    - name: Print CrowdStrike Full Image Scan Report
-      if: always()
-      run: |
-        jq '.' /tmp/report.json
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: us-east-1
 
     - name: ECR Login
       uses: aws-actions/amazon-ecr-login@v2
 
-    - name: Push image to AWS ECR
-      run: |
-        docker push $ECR_REGISTRY/$ECR_REPO:latest
-
-    - name: Pull CrowdStrike Falcon Container Image
-      run: |
-        docker pull $ECR_REGISTRY/$FALCON_IMAGE
-
-    # Patch ECS Task Definition Format (sed used to prevent commiting AWS Account ID)
-    - name: Patch ECS Task Defintion with CrowdStrike Falcon ECS Patching utility
-      run: |
-        sed -i 's/#AWSACCOUNTID#/${{ secrets.AWS_ACCOUNT_ID }}/g' taskdefinition.json
-        docker run \
-        --mount type=bind,source=$(pwd)/taskdefinition.json,target=/root/taskdefinition.json \
-        --rm $ECR_REGISTRY/$FALCON_IMAGE \
-        -cid ${{ secrets.FALCON_CID }} \
-        -image $ECR_REGISTRY/$FALCON_IMAGE \
-        -pulltoken $(echo "{\"auths\":{\"${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-west-2.amazonaws.com\":{\"auth\":\"$(echo AWS:$(aws ecr get-login-password)|base64 -w 0)\"}}}" | base64 -w 0) \
-        -ecs-spec-file /root/taskdefinition.json > taskdefinitionwithfalcon.json
-        cat taskdefinitionwithfalcon.json
-
-    - name: Upload CrowdStrike Falcon Patched ECS Task Definition to ECS
-      run: |
-        aws ecs register-task-definition --cli-input-json file://taskdefinitionwithfalcon.json 1>/dev/null
-    
-    # Patch CloudFormation Format Sample using Parameters for Image URI (Requires Falcon Container 6.53+)
-    - name: Patch CloudFormation with CrowdStrike Falcon ECS Patching utility
-      run: |
-        docker run \
-        --mount type=bind,source=$(pwd)/cloudformation.yaml,target=/root/cloudformation.yaml \
-        --rm $ECR_REGISTRY/$FALCON_IMAGE \
-        -cid ${{ secrets.FALCON_CID }} \
-        -image $ECR_REGISTRY/$FALCON_IMAGE \
-        -pulltoken $(echo "{\"auths\":{\"${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-west-2.amazonaws.com\":{\"auth\":\"$(echo AWS:$(aws ecr get-login-password)|base64 -w 0)\"}}}" | base64 -w 0) \
-        -cloudformationParams "ParameterKey=AppImagePath,ParameterValue=${ECR_REGISTRY}/${ECR_REPO}:latest" \
-        -ecs-spec-file /root/cloudformation.yaml > cloudformationwithfalcon.yaml
-        cat cloudformationwithfalcon.yaml
-        
-    - name: Create CloudFormation Change Set
-      run: |
-        aws cloudformation create-change-set \
-        --stack-name crowdstrike-ecs-fargate-demo \
-        --change-set-type CREATE \
-        --change-set-name "crowdstrike-ecs-fargate-demo-commit-${{ env.GITHUB_SHA }}" \
-        --template-body file://cloudformationwithfalcon.yaml \
-        --parameters "ParameterKey=AppImagePath,ParameterValue=${ECR_REGISTRY}/${ECR_REPO}:latest" \
-        --capabilities CAPABILITY_IAM
+    # # Patch ECS Task Definition Format (sed used to prevent commiting AWS Account ID)
+    # - name: Patch ECS Task Defintion with CrowdStrike Falcon ECS Patching utility
+    #   run: |
+    #     sed -i 's/#AWSACCOUNTID#/${{ secrets.AWS_ACCOUNT_ID }}/g' taskdefinition.json
+    #     docker run \
+    #     --mount type=bind,source=$(pwd)/taskdefinition.json,target=/root/taskdefinition.json \
+    #     --rm $ECR_REGISTRY/$FALCON_IMAGE \
+    #     -cid ${{ secrets.FALCON_CID }} \
+    #     -image $ECR_REGISTRY/$FALCON_IMAGE \
+    #     -pulltoken $(echo "{\"auths\":{\"${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com\":{\"auth\":\"$(echo AWS:$(aws ecr get-login-password)|base64 -w 0)\"}}}" | base64 -w 0) \
+    #     -ecs-spec-file /root/taskdefinition.json > taskdefinitionwithfalcon.json
+    #     cat taskdefinitionwithfalcon.json
