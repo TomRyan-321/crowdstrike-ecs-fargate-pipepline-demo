@@ -6,7 +6,7 @@ on:
   #   - cron: '30 5 * * 0'
   ## on push
   push:
-    branches: [ main ]
+    # branches: [ main ]
   ## manual trigger
   workflow_dispatch:
 
