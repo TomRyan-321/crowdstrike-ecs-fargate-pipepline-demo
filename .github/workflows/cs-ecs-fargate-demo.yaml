@@ -30,12 +30,12 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v3
 
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v2
-      with:
-        role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID}}:role/${{ secrets.ROLE_NAME }}
-        role-session-name: ${{ secrets.ROLE_NAME }}
-        aws-region: us-west-2
+    #- name: Configure AWS credentials
+    #  uses: aws-actions/configure-aws-credentials@v2
+    #  with:
+    #    role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID}}:role/${{ secrets.ROLE_NAME }}
+    #    role-session-name: ${{ secrets.ROLE_NAME }}
+    #    aws-region: us-west-2
 
     - name: Scan repository with CrowdStrike FCS IAC Scanner
       run: |
