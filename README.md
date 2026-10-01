@@ -25,7 +25,7 @@ In both patterns, the sensor runs inside each application container and sends te
 
 ## What the pipeline does
 
-[`.github/workflows/ecs-fargate-demo.yaml`](.github/workflows/ecs-fargate-demo.yaml) runs these jobs:
+[`.github/workflows/cs-ecs-fargate-demo.yaml`](.github/workflows/cs-ecs-fargate-demo.yaml) runs these jobs:
 
 ```text
 iac-scan ──► build ──┬──► 01 falconutil patch-image ──► register task definition
