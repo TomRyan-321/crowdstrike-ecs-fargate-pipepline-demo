@@ -1,0 +1,116 @@
+name: CrowdStrike Falcon ECS Fargate samples - teardown
+
+# Removes everything the samples workflow deploys (a running detection container
+# task, the CloudFormation stack, the Terraform-managed task definition, registered task definitions
+# and their log groups).
+# The bootstrap stack, ECR repositories and Terraform state bucket are left in place.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Shares the samples workflow's concurrency group so a teardown never overlaps a deployment
+concurrency:
+  group: CrowdStrike Falcon ECS Fargate samples-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  NAME_PREFIX: ${{ vars.NAME_PREFIX }}
+
+jobs:
+  teardown:
+    name: Remove sample deployments
+    runs-on: ubuntu-24.04
+    # deployment: false keeps the approval gate and OIDC environment claim without creating a
+    # GitHub deployment record (parallel jobs waiting on one deployment environment can't be approved)
+    environment:
+      name: ${{ github.ref == 'refs/heads/main' && 'aws-main' || 'aws-approval' }}
+      deployment: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-session-name: github-${{ github.run_id }}-teardown
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Write summary header
+        run: echo "## Demo teardown" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: "Detection container: stop running tasks and their schedules"
+        env:
+          CLUSTER: ${{ vars.ECS_CLUSTER }}
+        run: |
+          family="${NAME_PREFIX}-detection-container"
+          tasks="$(aws ecs list-tasks --cluster "$CLUSTER" --family "$family" --query 'taskArns[]' --output text)"
+          count=0
+          for task in $tasks; do
+            aws ecs stop-task --cluster "$CLUSTER" --task "$task" --reason "Demo teardown" >/dev/null
+            count=$((count + 1))
+          done
+          schedules="$(aws scheduler list-schedules --group-name "$NAME_PREFIX" --query 'Schedules[].Name' --output text)"
+          for schedule in $schedules; do
+            aws scheduler delete-schedule --group-name "$NAME_PREFIX" --name "$schedule"
+          done
+          echo "- Detection container: stopped $count task(s), removed $(wc -w <<< "$schedules") stop schedule(s)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: "04: Delete CloudFormation stack"
+        run: |
+          stack="${NAME_PREFIX}-cloudformation-patch"
+          aws cloudformation delete-stack --stack-name "$stack"
+          aws cloudformation wait stack-delete-complete --stack-name "$stack"
+          echo "- 04: deleted stack \`$stack\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.16.4
+          terraform_wrapper: false
+
+      # Variable values are not used when destroying, but Terraform requires them to be set
+      - name: "02: Terraform destroy"
+        working-directory: samples/02-terraform-module
+        env:
+          TF_IN_AUTOMATION: "true"
+          TF_INPUT: "false"
+          TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+          TF_VAR_name_prefix: ${{ vars.NAME_PREFIX }}
+          TF_VAR_app_image: unused
+          TF_VAR_falcon_image: unused
+          TF_VAR_falcon_cid: unused
+          TF_VAR_execution_role_arn: ${{ vars.TASK_EXECUTION_ROLE_ARN }}
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="key=${NAME_PREFIX}/02-terraform-module.tfstate" \
+            -backend-config="region=${AWS_REGION}"
+          terraform destroy -auto-approve
+          echo "- 02: destroyed Terraform resources" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: "01, 03, detection container: deregister task definitions and delete log groups"
+        run: |
+          for sample in patched-image task-definition-patch detection-container; do
+            family="${NAME_PREFIX}-${sample}"
+            arns="$(aws ecs list-task-definitions --family-prefix "$family" --status ACTIVE \
+              --query 'taskDefinitionArns[]' --output text)"
+            count=0
+            for arn in $arns; do
+              aws ecs deregister-task-definition --task-definition "$arn" >/dev/null
+              count=$((count + 1))
+            done
+            if aws logs delete-log-group --log-group-name "/ecs/${family}" 2>/dev/null; then
+              logs="deleted"
+            else
+              logs="not present"
+            fi
+            echo "- \`$family\`: deregistered $count revision(s), log group $logs" >> "$GITHUB_STEP_SUMMARY"
+          done

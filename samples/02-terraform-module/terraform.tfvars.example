@@ -1,0 +1,7 @@
+# Copy to terraform.tfvars to run locally. The pipeline passes these as -var / TF_VAR_ values.
+aws_region         = "us-west-2"
+app_image          = "123456789012.dkr.ecr.us-west-2.amazonaws.com/ecs-fargate-demo/app:latest"
+falcon_image       = "123456789012.dkr.ecr.us-west-2.amazonaws.com/ecs-fargate-demo/falcon-container:7.38.0-7703"
+falcon_sensor_tags = "cs-myteam-ecs-demo"
+falcon_cid         = "1234567890ABCDEFGHIJKLMNOPQRSTUV-WX"
+execution_role_arn = "arn:aws:iam::123456789012:role/ecs-fargate-demo-task-execution"

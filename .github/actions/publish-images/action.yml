@@ -1,0 +1,84 @@
+name: Publish demo images to Amazon ECR
+description: >-
+  Pushes the application image built by the "build" job to ECR and, optionally, mirrors the
+  Falcon Container sensor image into ECR so Fargate can pull it at task start. Expects AWS
+  credentials and an ECR login in the calling job.
+
+inputs:
+  registry:
+    description: ECR registry hostname (output of aws-actions/amazon-ecr-login)
+    required: true
+  name-prefix:
+    description: Prefix of the ECR repositories created by the bootstrap stack
+    required: true
+  mirror-sensor:
+    description: Also mirror the Falcon Container sensor image into ECR
+    default: "false"
+  sensor-version:
+    description: Falcon Container sensor version to mirror
+    default: ""
+  falcon-cloud:
+    description: Falcon cloud region
+    default: us-1
+  falcon-client-id:
+    description: Falcon API client ID (only needed when mirror-sensor is true)
+    default: ""
+  falcon-client-secret:
+    description: Falcon API client secret (only needed when mirror-sensor is true)
+    default: ""
+  falcon-scripts-version:
+    description: Release of CrowdStrike/falcon-scripts that provides falcon-container-sensor-pull.sh
+    default: v1.14.0
+
+outputs:
+  app-image:
+    description: Application image URI in ECR
+    value: ${{ steps.app.outputs.image }}
+  falcon-image:
+    description: Falcon Container sensor image URI in ECR (when mirrored)
+    value: ${{ steps.sensor.outputs.image }}
+
+runs:
+  using: composite
+  steps:
+    - name: Download application image
+      uses: actions/download-artifact@v8
+      with:
+        name: app-image
+
+    - name: Push application image to ECR
+      id: app
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.registry }}/${{ inputs.name-prefix }}/app:${{ github.sha }}
+      run: |
+        docker load --quiet --input app-image.tar.gz
+        docker tag "app:${GITHUB_SHA}" "$IMAGE"
+        docker push --quiet "$IMAGE"
+        echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+    - name: Mirror Falcon Container sensor to ECR
+      id: sensor
+      if: inputs.mirror-sensor == 'true'
+      shell: bash
+      env:
+        FALCON_CLIENT_ID: ${{ inputs.falcon-client-id }}
+        FALCON_CLIENT_SECRET: ${{ inputs.falcon-client-secret }}
+        FALCON_CLOUD: ${{ inputs.falcon-cloud }}
+        VERSION: ${{ inputs.sensor-version }}
+        REPOSITORY: ${{ inputs.name-prefix }}/falcon-container
+        MIRROR_REPO: ${{ inputs.registry }}/${{ inputs.name-prefix }}/falcon-container
+        SCRIPTS_VERSION: ${{ inputs.falcon-scripts-version }}
+      run: |
+        if aws ecr describe-images --repository-name "$REPOSITORY" --image-ids imageTag="$VERSION" >/dev/null 2>&1; then
+          echo "Falcon Container sensor $VERSION is already in ECR"
+        else
+          curl -fsSL -o falcon-container-sensor-pull.sh \
+            "https://raw.githubusercontent.com/CrowdStrike/falcon-scripts/${SCRIPTS_VERSION}/bash/containers/falcon-container-sensor-pull/falcon-container-sensor-pull.sh"
+          echo "::group::Copy Falcon Container sensor $VERSION to ECR"
+          # No --platform: copies the multi-architecture image (x86_64 and ARM64)
+          bash falcon-container-sensor-pull.sh --region "$FALCON_CLOUD" --type falcon-container \
+            --version "$VERSION" --copy "$MIRROR_REPO" --copy-omit-image-name
+          echo "::endgroup::"
+        fi
+        echo "image=$MIRROR_REPO:$VERSION" >> "$GITHUB_OUTPUT"

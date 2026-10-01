@@ -1,0 +1,51 @@
+{
+    "family": "${NAME_PREFIX}-patched-image",
+    "networkMode": "awsvpc",
+    "requiresCompatibilities": ["FARGATE"],
+    "runtimePlatform": {
+        "cpuArchitecture": "X86_64",
+        "operatingSystemFamily": "LINUX"
+    },
+    "cpu": "256",
+    "memory": "512",
+    "executionRoleArn": "${TASK_EXECUTION_ROLE_ARN}",
+    "containerDefinitions": [
+        {
+            "name": "demo-app",
+            "image": "${APP_IMAGE}",
+            "essential": true,
+            "portMappings": [
+                {
+                    "containerPort": 8080,
+                    "protocol": "tcp"
+                }
+            ],
+            "environment": [
+                {
+                    "name": "DEMO_SAMPLE",
+                    "value": "01-falconutil-patched-image"
+                }
+            ],
+            "linuxParameters": {
+                "capabilities": {
+                    "add": ["SYS_PTRACE"]
+                }
+            },
+            "logConfiguration": {
+                "logDriver": "awslogs",
+                "options": {
+                    "awslogs-group": "/ecs/${NAME_PREFIX}-patched-image",
+                    "awslogs-region": "${AWS_REGION}",
+                    "awslogs-create-group": "true",
+                    "awslogs-stream-prefix": "demo-app"
+                }
+            }
+        }
+    ],
+    "tags": [
+        {
+            "key": "sample",
+            "value": "01-falconutil-patched-image"
+        }
+    ]
+}

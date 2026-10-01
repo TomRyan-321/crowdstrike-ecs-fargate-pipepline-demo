@@ -1,132 +1,779 @@
-name: CrowdStrike ECS Fargate Demo
+name: CrowdStrike Falcon ECS Fargate samples
+
+# Builds the demo application, scans it with Falcon Cloud Security, then shows four ways to add
+# the Falcon Container sensor to an ECS Fargate task definition:
+#   01 - falconutil patch-image  (sensor embedded in the image at build time)
+#   02 - Terraform module        (CrowdStrike/terraform-aws-ecs-fargate, init container)
+#   03 - Task definition patch   (Falcon patching utility on a task definition JSON file)
+#   04 - CloudFormation patch    (Falcon patching utility on a CloudFormation template)
+#
+# Optionally (manual runs only) it also runs CrowdStrike's detection container as a Falcon-protected
+# Fargate task for an hour, so detections appear in the Falcon console.
+#
+# Each job writes a summary card to the run's Summary page showing what Falcon added.
+#
+# AWS access uses GitHub OIDC. Runs on main deploy automatically through the "aws-main"
+# environment; runs on any other branch use "aws-approval" and wait for a required reviewer.
+# There is intentionally no pull_request trigger.
 
 on:
-  ## scheduled job at 5:30 UTC every sunday
-  schedule:
-    - cron: '30 5 * * 0'
-  ## on push
   push:
-    branches: [ main ]
-  ## manual trigger
+    branches: [main]
+  schedule:
+    # 05:30 UTC every Sunday: picks up base image updates and the latest sensor release
+    - cron: "30 5 * * 0"
   workflow_dispatch:
+    inputs:
+      sample:
+        description: Which deployment sample to run
+        type: choice
+        default: all
+        options:
+          - all
+          - 01-falconutil-patch-image
+          - 02-terraform-module
+          - 03-task-definition-patch
+          - 04-cloudformation-patch
+          - none
+      detection_container:
+        description: Also run the Falcon-protected detection container on Fargate for one hour to generate detections
+        type: boolean
+        default: false
+      falcon_sensor_version:
+        description: Falcon Container sensor version, e.g. 7.38.0-7703 (blank for latest)
+        required: false
+        default: ""
 
 permissions:
-      id-token: write
-      contents: read
-      security-events: write
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  NAME_PREFIX: ${{ vars.NAME_PREFIX }}
+  FALCON_CLOUD: ${{ vars.FALCON_CLOUD }}
+  # Sensor grouping tags (comma-separated) applied by every sample, e.g. cs-myteam-ecs-demo
+  FALCON_SENSOR_TAGS: ${{ vars.FALCON_SENSOR_TAGS }}
+  FALCON_SCRIPTS_VERSION: v1.14.0
+  SUMMARY: python3 .github/scripts/summary.py
+  # Scan failures only warn unless the ENFORCE_SCAN_RESULTS repository variable is "true", so the
+  # demo continues past findings. Set it to "true" to block the pipeline on failed scans.
+  ENFORCE_SCAN_RESULTS: ${{ vars.ENFORCE_SCAN_RESULTS || 'false' }}
+  SOURCE_URL: ${{ github.server_url }}/${{ github.repository }}/blob/${{ github.sha }}
+  # Manual runs can pick one sample; push and scheduled runs run all of them
+  SAMPLE: ${{ inputs.sample || 'all' }}
 
 jobs:
-  crowdstrike-ecs-fargate-demo:
-    runs-on: ubuntu-latest
-
-    env:
-      ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID}}.dkr.ecr.us-west-2.amazonaws.com
-      FALCON_IMAGE: ecs-pipeline-demo/falcon-sensor:7.10.0-4906.container.x86_64.Release.US-1
-      ECR_REPO: ecs-pipeline-demo/app-images
-      GITHUB_SHA: ${{ github.sha }}
-      FCS_IAC_ZIP: fcs_0.34.0_Linux_x86_64.tar.gz
-
+  iac-scan:
+    name: Scan IaC with Falcon Cloud Security
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write
     steps:
-    - name: Checkout
-      uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v7
 
-    #- name: Configure AWS credentials
-    #  uses: aws-actions/configure-aws-credentials@v2
-    #  with:
-    #    role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID}}:role/${{ secrets.ROLE_NAME }}
-    #    role-session-name: ${{ secrets.ROLE_NAME }}
-    #    aws-region: us-west-2
+      - name: Write run overview
+        env:
+          DEPLOY_ENVIRONMENT: ${{ github.ref == 'refs/heads/main' && 'aws-main (runs automatically)' || 'aws-approval (waits for a reviewer)' }}
+          SENSOR_VERSION: ${{ inputs.falcon_sensor_version || 'latest' }}
+          DETECTION_CONTAINER: ${{ inputs.detection_container && 'yes, runs for one hour' || 'no' }}
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## CrowdStrike Falcon on Amazon ECS Fargate
 
-    - name: Scan repository with CrowdStrike FCS IAC Scanner
-      run: |
-        aws s3api get-object --bucket ${{ secrets.UTILITIESBUCKETNAME }} --key ${{ env.FCS_IAC_ZIP }} ${{ env.FCS_IAC_ZIP }}
-        tar xvzf ${{ env.FCS_IAC_ZIP }}
-        chmod +x fcs
-        ./fcs iac scan \
-        --fail-on "high=50,medium=50,low=50,info=50" \
-        --report-formats sarif \
-        --output-path $PWD \
-        --path $PWD | tee scansummary.txt
-        SARIFFILE=$(grep 'Results saved to file:' scansummary.txt | sed 's/.*file: //')
-        jq '.runs[].tool.driver.informationUri = "https://www.crowdstrike.com"' $SARIFFILE > results.sarif
+          This run builds and scans the demo app, then produces four Falcon-protected ECS task
+          definitions, one per deployment method. Each sample's card below shows exactly what
+          Falcon added.
 
+          | | |
+          |---|---|
+          | Trigger | \`${{ github.event_name }}\` on \`${{ github.ref_name }}\` (\`${GITHUB_SHA::12}\`) |
+          | AWS environment | \`${DEPLOY_ENVIRONMENT}\` · region \`${AWS_REGION}\` |
+          | Falcon cloud | \`${FALCON_CLOUD}\` |
+          | Sensor version | \`${SENSOR_VERSION}\` |
+          | Sensor grouping tags | \`${FALCON_SENSOR_TAGS:-none}\` |
+          | Samples | \`${SAMPLE}\` |
+          | Detection container | ${DETECTION_CONTAINER} |
+          | Scan results enforced | \`${ENFORCE_SCAN_RESULTS}\` |
 
-    - name: Upload SARIF file
-      if: always()
-      uses: github/codeql-action/upload-sarif@v2
-      with:
-        sarif_file: results.sarif
-        category: crowdstrike-fcs-iac-scanner
+          EOF
 
-    - name: Docker build & tag image
-      run: |
-        docker build -t $ECR_REGISTRY/$ECR_REPO:$GITHUB_SHA -t $ECR_REGISTRY/$ECR_REPO:latest .
+      - name: Run FCS IaC scan
+        id: fcs
+        uses: crowdstrike/fcs-action@v5.0.3
+        with:
+          falcon_client_id: ${{ secrets.FALCON_CLIENT_ID }}
+          falcon_region: ${{ vars.FALCON_CLOUD }}
+          path: .
+          report_formats: sarif
+          output_path: ./fcs-iac.sarif
+          upload_results: true
+          project_name: ${{ github.repository }}/${{ github.ref_name }}
+          # Deliberately tolerant for a demo repository; tighten for real workloads
+          fail_on: critical=50,high=50,medium=50,informational=50
+        env:
+          FALCON_CLIENT_SECRET: ${{ secrets.FALCON_CLIENT_SECRET }}
 
-    - name: Scan Container Image with CrowdStrike
-      uses: CrowdStrike/container-image-scan-action@main
-      with:
-        container_repository: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO }}
-        container_tag: ${{ env.GITHUB_SHA }}
-        crowdstrike_region: us-1
-        crowdstrike_score: 5000
-        retry_count: 30
-      env:
-        FALCON_CLIENT_SECRET: ${{ secrets.FALCON_CLIENT_SECRET }}
-        FALCON_CLIENT_ID: ${{ secrets.FALCON_CLIENT_ID }}
-        JSON_REPORT: /tmp/report.json
+      - name: Upload SARIF to GitHub code scanning
+        if: always() && hashFiles('fcs-iac.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: fcs-iac.sarif
+          category: crowdstrike-fcs-iac
 
-    - name: Print CrowdStrike Full Image Scan Report
-      if: always()
-      run: |
-        jq '.' /tmp/report.json
+      - name: Summarize IaC scan
+        if: always() && steps.fcs.outcome != 'skipped'
+        run: $SUMMARY iac fcs-iac.sarif "${{ steps.fcs.outputs.exit-code }}" >> "$GITHUB_STEP_SUMMARY"
 
-    - name: ECR Login
-      uses: aws-actions/amazon-ecr-login@v2
+      - name: Enforce IaC scan result
+        if: steps.fcs.outputs.exit-code != '0'
+        run: |
+          message="FCS IaC scan exceeded the fail_on thresholds (exit code ${{ steps.fcs.outputs.exit-code }})"
+          if [[ "$ENFORCE_SCAN_RESULTS" == "true" ]]; then
+            echo "::error::$message"
+            exit 1
+          fi
+          echo "::warning::$message. Continuing because ENFORCE_SCAN_RESULTS is not true."
+          echo "> ⚠️ Not enforced for this run: the pipeline continues." >> "$GITHUB_STEP_SUMMARY"
 
-    - name: Push image to AWS ECR
-      run: |
-        docker push $ECR_REGISTRY/$ECR_REPO:latest
+  # No AWS access here, so this job needs no approval. The image is handed to the sample jobs as an
+  # artifact; each sample publishes what it needs to ECR, so a branch run waits for one approval.
+  build:
+    name: Build and scan image
+    needs: iac-scan
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write
+    outputs:
+      falcon_sensor_version: ${{ steps.sensor.outputs.version }}
+    env:
+      IMAGE: app:${{ github.sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
 
-    - name: Pull CrowdStrike Falcon Container Image
-      run: |
-        docker pull $ECR_REGISTRY/$FALCON_IMAGE
+      - name: Build image
+        run: docker build --platform linux/amd64 -t "$IMAGE" app
 
-    # Patch ECS Task Definition Format (sed used to prevent commiting AWS Account ID)
-    - name: Patch ECS Task Defintion with CrowdStrike Falcon ECS Patching utility
-      run: |
-        sed -i 's/#AWSACCOUNTID#/${{ secrets.AWS_ACCOUNT_ID }}/g' taskdefinition.json
-        docker run \
-        --mount type=bind,source=$(pwd)/taskdefinition.json,target=/root/taskdefinition.json \
-        --rm $ECR_REGISTRY/$FALCON_IMAGE \
-        -cid ${{ secrets.FALCON_CID }} \
-        -image $ECR_REGISTRY/$FALCON_IMAGE \
-        -pulltoken $(echo "{\"auths\":{\"${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-west-2.amazonaws.com\":{\"auth\":\"$(echo AWS:$(aws ecr get-login-password)|base64 -w 0)\"}}}" | base64 -w 0) \
-        -ecs-spec-file /root/taskdefinition.json > taskdefinitionwithfalcon.json
-        cat taskdefinitionwithfalcon.json
+      # Findings never stop the job here: the result is reported in the summary, the SARIF upload
+      # and the Falcon console, and the "Enforce image assessment policy" step decides what to do.
+      - name: Scan image with Falcon Cloud Security
+        id: image-scan
+        uses: crowdstrike/fcs-action@v5.0.3
+        continue-on-error: true
+        with:
+          falcon_client_id: ${{ secrets.FALCON_CLIENT_ID }}
+          falcon_region: ${{ vars.FALCON_CLOUD }}
+          scan_type: image
+          image: app:${{ github.sha }}
+          platform: linux/amd64
+          # The action scans to fcs-image-scan.json and converts it to this SARIF file
+          report_formats: sarif
+          output_path: ./fcs-image-scan.sarif
+          upload_results: true
+        env:
+          FALCON_CLIENT_SECRET: ${{ secrets.FALCON_CLIENT_SECRET }}
 
-    - name: Upload CrowdStrike Falcon Patched ECS Task Definition to ECS
-      run: |
-        aws ecs register-task-definition --cli-input-json file://taskdefinitionwithfalcon.json 1>/dev/null
-    
-    # Patch CloudFormation Format Sample using Parameters for Image URI (Requires Falcon Container 6.53+)
-    - name: Patch CloudFormation with CrowdStrike Falcon ECS Patching utility
-      run: |
-        docker run \
-        --mount type=bind,source=$(pwd)/cloudformation.yaml,target=/root/cloudformation.yaml \
-        --rm $ECR_REGISTRY/$FALCON_IMAGE \
-        -cid ${{ secrets.FALCON_CID }} \
-        -image $ECR_REGISTRY/$FALCON_IMAGE \
-        -pulltoken $(echo "{\"auths\":{\"${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-west-2.amazonaws.com\":{\"auth\":\"$(echo AWS:$(aws ecr get-login-password)|base64 -w 0)\"}}}" | base64 -w 0) \
-        -cloudformationParams "ParameterKey=AppImagePath,ParameterValue=${ECR_REGISTRY}/${ECR_REPO}:latest" \
-        -ecs-spec-file /root/cloudformation.yaml > cloudformationwithfalcon.yaml
-        cat cloudformationwithfalcon.yaml
-        
-    - name: Create CloudFormation Change Set
-      run: |
-        aws cloudformation create-change-set \
-        --stack-name crowdstrike-ecs-fargate-demo \
-        --change-set-type CREATE \
-        --change-set-name "crowdstrike-ecs-fargate-demo-commit-${{ env.GITHUB_SHA }}" \
-        --template-body file://cloudformationwithfalcon.yaml \
-        --parameters "ParameterKey=AppImagePath,ParameterValue=${ECR_REGISTRY}/${ECR_REPO}:latest" \
-        --capabilities CAPABILITY_IAM
+      - name: Summarize image scan
+        if: always() && steps.image-scan.outcome != 'skipped'
+        run: $SUMMARY image-scan fcs-image-scan.json "${{ steps.image-scan.outputs.exit-code }}" "$IMAGE" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload image scan SARIF to GitHub code scanning
+        if: always() && hashFiles('fcs-image-scan.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: fcs-image-scan.sarif
+          category: crowdstrike-fcs-image
+
+      - name: Upload image scan reports
+        if: always() && hashFiles('fcs-image-scan.*') != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: fcs-image-scan
+          path: fcs-image-scan.*
+
+      # The pass/fail decision comes from the Image Assessment policy in the Falcon console
+      - name: Enforce image assessment policy
+        if: steps.image-scan.outputs.exit-code != '0'
+        run: |
+          message="Image failed the Falcon Image Assessment policy (exit code ${{ steps.image-scan.outputs.exit-code }})"
+          if [[ "$ENFORCE_SCAN_RESULTS" == "true" ]]; then
+            echo "::error::$message"
+            exit 1
+          fi
+          echo "::warning::$message. Continuing because ENFORCE_SCAN_RESULTS is not true."
+          echo "> ⚠️ Not enforced for this run: the samples still deploy this image." >> "$GITHUB_STEP_SUMMARY"
+
+      # Resolved once so every sample uses the same sensor release
+      - name: Resolve Falcon Container sensor version
+        id: sensor
+        env:
+          FALCON_CLIENT_ID: ${{ secrets.FALCON_CLIENT_ID }}
+          FALCON_CLIENT_SECRET: ${{ secrets.FALCON_CLIENT_SECRET }}
+          FALCON_SENSOR_VERSION: ${{ inputs.falcon_sensor_version }}
+        run: |
+          curl -fsSL -o falcon-container-sensor-pull.sh \
+            "https://raw.githubusercontent.com/CrowdStrike/falcon-scripts/${FALCON_SCRIPTS_VERSION}/bash/containers/falcon-container-sensor-pull/falcon-container-sensor-pull.sh"
+          args=(--region "$FALCON_CLOUD" --type falcon-container)
+          if [[ -n "$FALCON_SENSOR_VERSION" ]]; then
+            args+=(--version "$FALCON_SENSOR_VERSION")
+          fi
+          source_image="$(bash falcon-container-sensor-pull.sh "${args[@]}" --get-image-path | tail -n 1)"
+          version="${source_image##*:}"
+          echo "Falcon Container sensor: $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ### 📦 Falcon Container sensor
+
+          All samples use version \`$version\`. Samples 02 to 04 pull it from \`<ecr>/${NAME_PREFIX}/falcon-container\` at task start.
+
+          EOF
+
+      - name: Save image for the sample jobs
+        run: docker save "$IMAGE" | gzip > app-image.tar.gz
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: app-image
+          path: app-image.tar.gz
+          retention-days: 1
+
+  sample-01-patched-image:
+    name: "01: falconutil patch-image"
+    needs: build
+    if: ${{ !inputs.sample || inputs.sample == 'all' || inputs.sample == '01-falconutil-patch-image' }}
+    runs-on: ubuntu-24.04
+    environment:
+      name: ${{ github.ref == 'refs/heads/main' && 'aws-main' || 'aws-approval' }}
+      deployment: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-session-name: github-${{ github.run_id }}-sample-01
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Publish application image to ECR
+        id: publish
+        uses: ./.github/actions/publish-images
+        with:
+          registry: ${{ steps.ecr.outputs.registry }}
+          name-prefix: ${{ vars.NAME_PREFIX }}
+
+      - name: Patch image with the Falcon Container sensor
+        uses: crowdstrike/falconutil-action@v1.1.0
+        with:
+          falcon_client_id: ${{ secrets.FALCON_CLIENT_ID }}
+          falcon_region: ${{ vars.FALCON_CLOUD }}
+          version: ${{ needs.build.outputs.falcon_sensor_version }}
+          cid: ${{ secrets.FALCON_CID }}
+          source_image_uri: ${{ steps.publish.outputs.app-image }}
+          target_image_uri: ${{ steps.ecr.outputs.registry }}/${{ vars.NAME_PREFIX }}/app-falcon-patched:${{ github.sha }}
+          cloud_service: ECS_FARGATE
+          falconctl_opts: ${{ vars.FALCON_SENSOR_TAGS && format('--tags={0}', vars.FALCON_SENSOR_TAGS) || '' }}
+          image_pull_policy: IfNotPresent
+        env:
+          FALCON_CLIENT_SECRET: ${{ secrets.FALCON_CLIENT_SECRET }}
+
+      - name: Push patched image
+        run: docker push --quiet "${{ steps.ecr.outputs.registry }}/${{ vars.NAME_PREFIX }}/app-falcon-patched:${{ github.sha }}"
+
+      - name: Register task definition
+        id: register
+        env:
+          APP_IMAGE: ${{ steps.ecr.outputs.registry }}/${{ vars.NAME_PREFIX }}/app-falcon-patched:${{ github.sha }}
+          TASK_EXECUTION_ROLE_ARN: ${{ vars.TASK_EXECUTION_ROLE_ARN }}
+        run: |
+          # shellcheck disable=SC2016 # envsubst takes a literal list of variables to replace
+          envsubst '${NAME_PREFIX} ${APP_IMAGE} ${AWS_REGION} ${TASK_EXECUTION_ROLE_ARN}' \
+            < samples/01-falconutil-patched-image/taskdefinition.json > taskdefinition.json
+          arn="$(aws ecs register-task-definition --cli-input-json file://taskdefinition.json \
+            --query taskDefinition.taskDefinitionArn --output text)"
+          echo "Registered $arn"
+          echo "arn=$arn" >> "$GITHUB_OUTPUT"
+
+      - name: Summarize what Falcon added
+        env:
+          APP_IMAGE: ${{ steps.publish.outputs.app-image }}
+          PATCHED_IMAGE: ${{ steps.ecr.outputs.registry }}/${{ vars.NAME_PREFIX }}/app-falcon-patched:${{ github.sha }}
+        run: |
+          aws ecs describe-task-definition --task-definition "${{ steps.register.outputs.arn }}" > registered.json
+          docker image inspect "$APP_IMAGE" > original-image.json
+          docker image inspect "$PATCHED_IMAGE" > patched-image.json
+          {
+            $SUMMARY task-definition registered.json "01 · falconutil patch-image" \
+              "The sensor is built into a new image by \`falconutil patch-image\`. The task definition only adds \`SYS_PTRACE\`."
+            $SUMMARY image-diff original-image.json patched-image.json
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  sample-02-terraform-module:
+    name: "02: Terraform module"
+    needs: build
+    if: ${{ !inputs.sample || inputs.sample == 'all' || inputs.sample == '02-terraform-module' }}
+    runs-on: ubuntu-24.04
+    environment:
+      name: ${{ github.ref == 'refs/heads/main' && 'aws-main' || 'aws-approval' }}
+      deployment: false
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: samples/02-terraform-module
+    env:
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+      TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+      TF_VAR_name_prefix: ${{ vars.NAME_PREFIX }}
+      TF_VAR_falcon_cid: ${{ secrets.FALCON_CID }}
+      TF_VAR_falcon_sensor_tags: ${{ vars.FALCON_SENSOR_TAGS }}
+      TF_VAR_execution_role_arn: ${{ vars.TASK_EXECUTION_ROLE_ARN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-session-name: github-${{ github.run_id }}-sample-02
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Publish images to ECR
+        id: publish
+        uses: ./.github/actions/publish-images
+        with:
+          registry: ${{ steps.ecr.outputs.registry }}
+          name-prefix: ${{ vars.NAME_PREFIX }}
+          mirror-sensor: "true"
+          sensor-version: ${{ needs.build.outputs.falcon_sensor_version }}
+          falcon-cloud: ${{ vars.FALCON_CLOUD }}
+          falcon-client-id: ${{ secrets.FALCON_CLIENT_ID }}
+          falcon-client-secret: ${{ secrets.FALCON_CLIENT_SECRET }}
+          falcon-scripts-version: ${{ env.FALCON_SCRIPTS_VERSION }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.16.4
+          terraform_wrapper: false
+
+      - name: Terraform init
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="key=${NAME_PREFIX}/02-terraform-module.tfstate" \
+            -backend-config="region=${AWS_REGION}"
+
+      - name: Terraform plan
+        env:
+          TF_VAR_app_image: ${{ steps.publish.outputs.app-image }}
+          TF_VAR_falcon_image: ${{ steps.publish.outputs.falcon-image }}
+        run: terraform plan -out=tfplan
+
+      - name: Terraform apply
+        run: terraform apply tfplan
+
+      - name: Summarize what Falcon added
+        run: |
+          aws ecs describe-task-definition --task-definition "$(terraform output -raw task_definition_arn)" > registered.json
+          python3 "$GITHUB_WORKSPACE/.github/scripts/summary.py" task-definition registered.json "02 · Terraform module" \
+            "Built by the [CrowdStrike/terraform-aws-ecs-fargate](https://github.com/CrowdStrike/terraform-aws-ecs-fargate) module from a plain description of the [app container](${SOURCE_URL}/samples/02-terraform-module/main.tf)." \
+            >> "$GITHUB_STEP_SUMMARY"
+
+  sample-03-task-definition-patch:
+    name: "03: Task definition patch"
+    needs: build
+    if: ${{ !inputs.sample || inputs.sample == 'all' || inputs.sample == '03-task-definition-patch' }}
+    runs-on: ubuntu-24.04
+    environment:
+      name: ${{ github.ref == 'refs/heads/main' && 'aws-main' || 'aws-approval' }}
+      deployment: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TASK_EXECUTION_ROLE_ARN: ${{ vars.TASK_EXECUTION_ROLE_ARN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-session-name: github-${{ github.run_id }}-sample-03
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Publish images to ECR
+        id: publish
+        uses: ./.github/actions/publish-images
+        with:
+          registry: ${{ steps.ecr.outputs.registry }}
+          name-prefix: ${{ vars.NAME_PREFIX }}
+          mirror-sensor: "true"
+          sensor-version: ${{ needs.build.outputs.falcon_sensor_version }}
+          falcon-cloud: ${{ vars.FALCON_CLOUD }}
+          falcon-client-id: ${{ secrets.FALCON_CLIENT_ID }}
+          falcon-client-secret: ${{ secrets.FALCON_CLIENT_SECRET }}
+          falcon-scripts-version: ${{ env.FALCON_SCRIPTS_VERSION }}
+
+      - name: Export image URIs
+        run: |
+          echo "APP_IMAGE=${{ steps.publish.outputs.app-image }}" >> "$GITHUB_ENV"
+          echo "FALCON_IMAGE=${{ steps.publish.outputs.falcon-image }}" >> "$GITHUB_ENV"
+
+      # The patching utility reads the application image config (entrypoint/cmd) using this token
+      - name: Create registry pull token
+        id: token
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          password="$(aws ecr get-login-password)"
+          echo "::add-mask::$password"
+          auth="$(printf 'AWS:%s' "$password" | base64 -w 0)"
+          token="$(printf '{"auths":{"%s":{"auth":"%s"}}}' "$REGISTRY" "$auth" | base64 -w 0)"
+          echo "::add-mask::$token"
+          echo "pulltoken=$token" >> "$GITHUB_OUTPUT"
+
+      - name: Patch task definition with the Falcon patching utility
+        run: |
+          mkdir -p build
+          # shellcheck disable=SC2016 # envsubst takes a literal list of variables to replace
+          envsubst '${NAME_PREFIX} ${APP_IMAGE} ${AWS_REGION} ${TASK_EXECUTION_ROLE_ARN}' \
+            < samples/03-task-definition-patch/taskdefinition.json > build/taskdefinition.json
+
+          falconctl_opts=()
+          if [[ -n "$FALCON_SENSOR_TAGS" ]]; then
+            falconctl_opts=(-falconctl-opts "--tags=$FALCON_SENSOR_TAGS")
+          fi
+
+          docker run --rm --platform linux/amd64 \
+            -v "$PWD/build:/spec" \
+            "$FALCON_IMAGE" \
+            -cid "${{ secrets.FALCON_CID }}" \
+            -image "$FALCON_IMAGE" \
+            -pulltoken "${{ steps.token.outputs.pulltoken }}" \
+            "${falconctl_opts[@]}" \
+            -ecs-spec-file /spec/taskdefinition.json > build/taskdefinition.patched.json
+
+          echo "::group::Full diff of the patched task definition"
+          diff <(jq -S . build/taskdefinition.json) <(jq -S . build/taskdefinition.patched.json) || true
+          echo "::endgroup::"
+
+          if [[ -n "$FALCON_SENSOR_TAGS" ]] && ! grep -q "$FALCON_SENSOR_TAGS" build/taskdefinition.patched.json; then
+            echo "::warning::Sensor tags were not found in the patched output"
+          fi
+
+      - name: Register task definition
+        id: register
+        run: |
+          arn="$(aws ecs register-task-definition --cli-input-json file://build/taskdefinition.patched.json \
+            --query taskDefinition.taskDefinitionArn --output text)"
+          echo "Registered $arn"
+          echo "arn=$arn" >> "$GITHUB_OUTPUT"
+
+      - name: Summarize what Falcon added
+        run: |
+          aws ecs describe-task-definition --task-definition "${{ steps.register.outputs.arn }}" > build/registered.json
+          $SUMMARY task-definition build/registered.json "03 · Task definition patch" \
+            "[\`taskdefinition.json\`](${SOURCE_URL}/samples/03-task-definition-patch/taskdefinition.json) patched by the Falcon patching utility, then registered with \`aws ecs register-task-definition\`." \
+            >> "$GITHUB_STEP_SUMMARY"
+
+  sample-04-cloudformation-patch:
+    name: "04: CloudFormation patch"
+    needs: build
+    if: ${{ !inputs.sample || inputs.sample == 'all' || inputs.sample == '04-cloudformation-patch' }}
+    runs-on: ubuntu-24.04
+    environment:
+      name: ${{ github.ref == 'refs/heads/main' && 'aws-main' || 'aws-approval' }}
+      deployment: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      STACK_NAME: ${{ vars.NAME_PREFIX }}-cloudformation-patch
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-session-name: github-${{ github.run_id }}-sample-04
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Publish images to ECR
+        id: publish
+        uses: ./.github/actions/publish-images
+        with:
+          registry: ${{ steps.ecr.outputs.registry }}
+          name-prefix: ${{ vars.NAME_PREFIX }}
+          mirror-sensor: "true"
+          sensor-version: ${{ needs.build.outputs.falcon_sensor_version }}
+          falcon-cloud: ${{ vars.FALCON_CLOUD }}
+          falcon-client-id: ${{ secrets.FALCON_CLIENT_ID }}
+          falcon-client-secret: ${{ secrets.FALCON_CLIENT_SECRET }}
+          falcon-scripts-version: ${{ env.FALCON_SCRIPTS_VERSION }}
+
+      - name: Export image URIs
+        run: |
+          echo "APP_IMAGE=${{ steps.publish.outputs.app-image }}" >> "$GITHUB_ENV"
+          echo "FALCON_IMAGE=${{ steps.publish.outputs.falcon-image }}" >> "$GITHUB_ENV"
+
+      - name: Create registry pull token
+        id: token
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          password="$(aws ecr get-login-password)"
+          echo "::add-mask::$password"
+          auth="$(printf 'AWS:%s' "$password" | base64 -w 0)"
+          token="$(printf '{"auths":{"%s":{"auth":"%s"}}}' "$REGISTRY" "$auth" | base64 -w 0)"
+          echo "::add-mask::$token"
+          echo "pulltoken=$token" >> "$GITHUB_OUTPUT"
+
+      # -cloudformationParams resolves the image parameter so the utility can inspect the image
+      - name: Patch CloudFormation template with the Falcon patching utility
+        run: |
+          mkdir -p build
+          cp samples/04-cloudformation-patch/cloudformation.yaml build/cloudformation.yaml
+
+          falconctl_opts=()
+          if [[ -n "$FALCON_SENSOR_TAGS" ]]; then
+            falconctl_opts=(-falconctl-opts "--tags=$FALCON_SENSOR_TAGS")
+          fi
+
+          docker run --rm --platform linux/amd64 \
+            -v "$PWD/build:/spec" \
+            "$FALCON_IMAGE" \
+            -cid "${{ secrets.FALCON_CID }}" \
+            -image "$FALCON_IMAGE" \
+            -pulltoken "${{ steps.token.outputs.pulltoken }}" \
+            "${falconctl_opts[@]}" \
+            -cloudformationParams "ParameterKey=AppImagePath,ParameterValue=${APP_IMAGE}" \
+            -ecs-spec-file /spec/cloudformation.yaml > build/cloudformation.patched.yaml
+
+          echo "::group::Full diff of the patched template"
+          diff build/cloudformation.yaml build/cloudformation.patched.yaml || true
+          echo "::endgroup::"
+
+          if [[ -n "$FALCON_SENSOR_TAGS" ]] && ! grep -q "$FALCON_SENSOR_TAGS" build/cloudformation.patched.yaml; then
+            echo "::warning::Sensor tags were not found in the patched output"
+          fi
+
+      - name: Deploy CloudFormation stack
+        id: deploy
+        run: |
+          aws cloudformation deploy \
+            --stack-name "$STACK_NAME" \
+            --template-file build/cloudformation.patched.yaml \
+            --no-fail-on-empty-changeset \
+            --parameter-overrides \
+              NamePrefix="$NAME_PREFIX" \
+              AppImagePath="$APP_IMAGE" \
+              ExecutionRoleArn="${{ vars.TASK_EXECUTION_ROLE_ARN }}" \
+            --tags sample=04-cloudformation-patch
+          arn="$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='TaskDefinitionArn'].OutputValue" --output text)"
+          echo "Registered $arn"
+          echo "arn=$arn" >> "$GITHUB_OUTPUT"
+
+      - name: Summarize what Falcon added
+        run: |
+          aws ecs describe-task-definition --task-definition "${{ steps.deploy.outputs.arn }}" > build/registered.json
+          $SUMMARY task-definition build/registered.json "04 · CloudFormation patch" \
+            "[\`cloudformation.yaml\`](${SOURCE_URL}/samples/04-cloudformation-patch/cloudformation.yaml) patched by the Falcon patching utility, then deployed as stack \`$STACK_NAME\` with \`aws cloudformation deploy\`." \
+            >> "$GITHUB_STEP_SUMMARY"
+
+  # Runs CrowdStrike's detection container (https://github.com/CrowdStrike/detection-container)
+  # as a Falcon-protected Fargate task so detections show up in the Falcon console. The task has a
+  # public IP for outbound access only (no inbound rules) and is stopped by a one-time EventBridge
+  # Scheduler schedule, so it shuts down even if this run is cancelled.
+  detection-container:
+    name: "Detection container: run for 1 hour"
+    needs: build
+    if: ${{ inputs.detection_container }}
+    runs-on: ubuntu-24.04
+    environment:
+      name: ${{ github.ref == 'refs/heads/main' && 'aws-main' || 'aws-approval' }}
+      deployment: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      SOURCE_IMAGE: quay.io/crowdstrike/detection-container:latest
+      RUNTIME_MINUTES: "60"
+      SENSOR_VERSION: ${{ needs.build.outputs.falcon_sensor_version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-session-name: github-${{ github.run_id }}-detection
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # The patched image is built once per sensor version and tag set, then reused
+      - name: Look for a prebuilt patched image
+        id: image
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          repo="${NAME_PREFIX}/detection-container"
+          tag="${SENSOR_VERSION}-$(printf '%s' "$FALCON_SENSOR_TAGS" | sha256sum | cut -c1-8)"
+          echo "uri=$REGISTRY/$repo:$tag" >> "$GITHUB_OUTPUT"
+          if aws ecr describe-images --repository-name "$repo" --image-ids imageTag="$tag" >/dev/null 2>&1; then
+            echo "Using prebuilt image $repo:$tag"
+            echo "prebuilt=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No prebuilt image for $tag yet; patching one now"
+            echo "prebuilt=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Pull the detection container
+        if: steps.image.outputs.prebuilt != 'true'
+        run: docker pull --quiet --platform linux/amd64 "$SOURCE_IMAGE"
+
+      - name: Patch the detection container with the Falcon Container sensor
+        if: steps.image.outputs.prebuilt != 'true'
+        uses: crowdstrike/falconutil-action@v1.1.0
+        with:
+          falcon_client_id: ${{ secrets.FALCON_CLIENT_ID }}
+          falcon_region: ${{ vars.FALCON_CLOUD }}
+          version: ${{ needs.build.outputs.falcon_sensor_version }}
+          cid: ${{ secrets.FALCON_CID }}
+          source_image_uri: ${{ env.SOURCE_IMAGE }}
+          target_image_uri: ${{ steps.image.outputs.uri }}
+          cloud_service: ECS_FARGATE
+          falconctl_opts: ${{ vars.FALCON_SENSOR_TAGS && format('--tags={0}', vars.FALCON_SENSOR_TAGS) || '' }}
+          image_pull_policy: IfNotPresent
+        env:
+          FALCON_CLIENT_SECRET: ${{ secrets.FALCON_CLIENT_SECRET }}
+
+      - name: Push patched image
+        if: steps.image.outputs.prebuilt != 'true'
+        run: docker push --quiet "${{ steps.image.outputs.uri }}"
+
+      - name: Register task definition
+        id: register
+        env:
+          DETECTION_IMAGE: ${{ steps.image.outputs.uri }}
+          TASK_EXECUTION_ROLE_ARN: ${{ vars.TASK_EXECUTION_ROLE_ARN }}
+        run: |
+          # shellcheck disable=SC2016 # envsubst takes a literal list of variables to replace
+          envsubst '${NAME_PREFIX} ${DETECTION_IMAGE} ${AWS_REGION} ${TASK_EXECUTION_ROLE_ARN}' \
+            < demo/detection-container/taskdefinition.json > taskdefinition.json
+          arn="$(aws ecs register-task-definition --cli-input-json file://taskdefinition.json \
+            --query taskDefinition.taskDefinitionArn --output text)"
+          echo "Registered $arn"
+          echo "arn=$arn" >> "$GITHUB_OUTPUT"
+
+      - name: Run the task
+        id: run
+        env:
+          CLUSTER: ${{ vars.ECS_CLUSTER }}
+          SUBNETS: ${{ vars.DEMO_SUBNETS }}
+          SECURITY_GROUP: ${{ vars.DEMO_SECURITY_GROUP }}
+        run: |
+          task="$(aws ecs run-task \
+            --cluster "$CLUSTER" \
+            --task-definition "${{ steps.register.outputs.arn }}" \
+            --launch-type FARGATE \
+            --network-configuration "awsvpcConfiguration={subnets=[$SUBNETS],securityGroups=[$SECURITY_GROUP],assignPublicIp=ENABLED}" \
+            --query 'tasks[0].taskArn' --output text)"
+          if [[ -z "$task" || "$task" == "None" ]]; then
+            echo "::error::RunTask did not start a task"
+            exit 1
+          fi
+          echo "Started $task, waiting for it to reach RUNNING"
+          if ! aws ecs wait tasks-running --cluster "$CLUSTER" --tasks "$task"; then
+            aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$task" \
+              --query 'tasks[0].{stoppedReason: stoppedReason, containers: containers[].{name: name, reason: reason, exitCode: exitCode}}'
+            echo "::error::The detection task did not reach RUNNING"
+            exit 1
+          fi
+          echo "task_arn=$task" >> "$GITHUB_OUTPUT"
+          echo "task_id=${task##*/}" >> "$GITHUB_OUTPUT"
+
+      - name: Schedule the task to stop in one hour
+        id: schedule
+        env:
+          CLUSTER: ${{ vars.ECS_CLUSTER }}
+          TASK_ARN: ${{ steps.run.outputs.task_arn }}
+          TASK_ID: ${{ steps.run.outputs.task_id }}
+          SCHEDULER_ROLE_ARN: ${{ vars.SCHEDULER_ROLE_ARN }}
+        run: |
+          stop_at="$(date -u -d "+${RUNTIME_MINUTES} minutes" +%Y-%m-%dT%H:%M:%S)"
+          target="$(jq -n --arg role "$SCHEDULER_ROLE_ARN" --arg cluster "$CLUSTER" --arg task "$TASK_ARN" '{
+            Arn: "arn:aws:scheduler:::aws-sdk:ecs:stopTask",
+            RoleArn: $role,
+            Input: ({Cluster: $cluster, Task: $task, Reason: "Detection demo finished (scheduled stop)"} | tojson)
+          }')"
+          # One-time schedule that deletes itself after it fires
+          aws scheduler create-schedule \
+            --name "stop-${TASK_ID}" \
+            --group-name "$NAME_PREFIX" \
+            --schedule-expression "at(${stop_at})" \
+            --schedule-expression-timezone UTC \
+            --flexible-time-window Mode=OFF \
+            --action-after-completion DELETE \
+            --target "$target" >/dev/null
+          echo "Task stops at ${stop_at} UTC"
+          echo "stop_at=${stop_at}" >> "$GITHUB_OUTPUT"
+
+      - name: Summarize the detection demo
+        env:
+          TASK_ID: ${{ steps.run.outputs.task_id }}
+          STOP_AT: ${{ steps.schedule.outputs.stop_at }}
+          CLUSTER: ${{ vars.ECS_CLUSTER }}
+          PREBUILT: ${{ steps.image.outputs.prebuilt == 'true' && 'reused the prebuilt patched image' || 'patched a new image' }}
+        run: |
+          aws ecs describe-task-definition --task-definition "${{ steps.register.outputs.arn }}" > registered.json
+          {
+            $SUMMARY task-definition registered.json "🚨 Detection container" \
+              "[CrowdStrike/detection-container](https://github.com/CrowdStrike/detection-container), Falcon-patched with \`falconutil patch-image\` ($PREBUILT)."
+            cat <<EOF
+          **Task:** [\`${TASK_ID}\`](https://${AWS_REGION}.console.aws.amazon.com/ecs/v2/clusters/${CLUSTER}/tasks/${TASK_ID}/configuration?region=${AWS_REGION}) is running · stops automatically at **${STOP_AT} UTC**
+
+          It runs every bundled detection scenario about 15 seconds apart, then triggers a random scenario every few minutes until it stops. In the Falcon console, the detections are tagged with the sensor grouping tag \`${FALCON_SENSOR_TAGS:-<none>}\`. To find the host, go to **Host setup and management → Manage endpoints → Host management** and filter on **Pod ID** = \`${TASK_ID}\`.
+
+          EOF
+          } >> "$GITHUB_STEP_SUMMARY"

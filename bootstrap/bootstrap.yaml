@@ -1,0 +1,501 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  One-time foundation for the CrowdStrike Falcon ECS Fargate pipeline samples.
+  Creates the GitHub Actions OIDC trust, a least-privilege deploy role scoped to a single
+  repository and its GitHub environments, ECR repositories, a shared ECS task execution role,
+  an S3 bucket for Terraform state, and a cluster, public network and stop-task scheduler for
+  the detection container demo.
+
+Parameters:
+  GitHubOwner:
+    Type: String
+    Description: GitHub user or organization that owns the repository
+  GitHubRepository:
+    Type: String
+    Description: GitHub repository name (without the owner)
+  MainEnvironmentName:
+    Type: String
+    Default: aws-main
+    Description: >-
+      GitHub environment used by runs on the main branch. Restrict it to the main branch with a
+      deployment branch policy.
+  ApprovalEnvironmentName:
+    Type: String
+    Default: aws-approval
+    Description: >-
+      GitHub environment used by runs on any other branch. Protect it with required reviewers.
+  NamePrefix:
+    Type: String
+    Default: ecs-fargate-demo
+    AllowedPattern: "^[a-z0-9-]+$"
+    Description: Prefix applied to every resource name
+  CreateOIDCProvider:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      Set to false if the account already has the token.actions.githubusercontent.com OIDC
+      provider (only one can exist per account).
+
+Conditions:
+  ShouldCreateOIDCProvider: !Equals [!Ref CreateOIDCProvider, "true"]
+
+Resources:
+  GitHubOIDCProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: ShouldCreateOIDCProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+
+  # Only jobs that run inside one of the two GitHub environments of this one repository can
+  # assume the role. GitHub enforces the environment protections before issuing the token:
+  #   aws-main     -> deployment branch policy limited to main (runs automatically)
+  #   aws-approval -> required reviewers (any other branch waits for approval)
+  # Pull request, branch and tag subjects (repo:<owner>/<repo>:pull_request, ...:ref:...) are
+  # not trusted.
+  GitHubDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${NamePrefix}-github-deploy"
+      Description: !Sub "Assumed by GitHub Actions in ${GitHubOwner}/${GitHubRepository}"
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - ShouldCreateOIDCProvider
+                - !Ref GitHubOIDCProvider
+                - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com"
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub:
+                  - !Sub "repo:${GitHubOwner}/${GitHubRepository}:environment:${MainEnvironmentName}"
+                  - !Sub "repo:${GitHubOwner}/${GitHubRepository}:environment:${ApprovalEnvironmentName}"
+      Policies:
+        - PolicyName: ecs-fargate-samples
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: EcrLogin
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Sid: EcrPushPull
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:CompleteLayerUpload
+                  - ecr:DescribeImages
+                  - ecr:DescribeRepositories
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:InitiateLayerUpload
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                Resource:
+                  - !GetAtt AppRepository.Arn
+                  - !GetAtt AppPatchedRepository.Arn
+                  - !GetAtt FalconContainerRepository.Arn
+                  - !GetAtt DetectionContainerRepository.Arn
+              # ecs:RegisterTaskDefinition does not support resource-level permissions
+              - Sid: EcsTaskDefinitions
+                Effect: Allow
+                Action:
+                  - ecs:DeregisterTaskDefinition
+                  - ecs:DescribeTaskDefinition
+                  - ecs:ListTaskDefinitions
+                  - ecs:RegisterTaskDefinition
+                Resource: "*"
+              - Sid: EcsTagging
+                Effect: Allow
+                Action:
+                  - ecs:ListTagsForResource
+                  - ecs:TagResource
+                  - ecs:UntagResource
+                Resource: !Sub "arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/${NamePrefix}-*"
+              - Sid: PassTaskExecutionRole
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt TaskExecutionRole.Arn
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: ecs-tasks.amazonaws.com
+              # Detection container demo: run the task in the demo cluster only
+              - Sid: RunDetectionTask
+                Effect: Allow
+                Action: ecs:RunTask
+                Resource: !Sub "arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/${NamePrefix}-detection-container:*"
+                Condition:
+                  ArnEquals:
+                    ecs:cluster: !GetAtt DemoCluster.Arn
+              - Sid: ManageDemoTasks
+                Effect: Allow
+                Action:
+                  - ecs:DescribeTasks
+                  - ecs:StopTask
+                Resource: !Sub "arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task/${DemoCluster}/*"
+              - Sid: ListDemoTasks
+                Effect: Allow
+                Action: ecs:ListTasks
+                Resource: "*"
+                Condition:
+                  ArnEquals:
+                    ecs:cluster: !GetAtt DemoCluster.Arn
+              - Sid: StopTaskSchedules
+                Effect: Allow
+                Action:
+                  - scheduler:CreateSchedule
+                  - scheduler:DeleteSchedule
+                  - scheduler:GetSchedule
+                Resource: !Sub "arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/${DemoScheduleGroup}/*"
+              - Sid: ListStopTaskSchedules
+                Effect: Allow
+                Action: scheduler:ListSchedules
+                Resource: "*"
+              - Sid: PassSchedulerRole
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt StopTaskSchedulerRole.Arn
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: scheduler.amazonaws.com
+              - Sid: LogGroupsDescribe
+                Effect: Allow
+                Action: logs:DescribeLogGroups
+                Resource: "*"
+              - Sid: LogGroupsManage
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:DeleteLogGroup
+                  - logs:DeleteRetentionPolicy
+                  - logs:ListTagsForResource
+                  - logs:ListTagsLogGroup
+                  - logs:PutRetentionPolicy
+                  - logs:TagLogGroup
+                  - logs:TagResource
+                  - logs:UntagLogGroup
+                  - logs:UntagResource
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/ecs/${NamePrefix}-*"
+              - Sid: TerraformStateBucket
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt TerraformStateBucket.Arn
+              - Sid: TerraformStateObjects
+                Effect: Allow
+                Action:
+                  - s3:DeleteObject
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !Sub "${TerraformStateBucket.Arn}/*"
+              - Sid: CloudFormationSampleStack
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:CreateStack
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:DeleteStack
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStacks
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:GetTemplate
+                  - cloudformation:UpdateStack
+                Resource: !Sub "arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${NamePrefix}-cloudformation-patch/*"
+              - Sid: CloudFormationTemplates
+                Effect: Allow
+                Action:
+                  - cloudformation:GetTemplateSummary
+                  - cloudformation:ValidateTemplate
+                Resource: "*"
+
+  # Shared by every sample task definition. CreateLogGroup lets the JSON task definition samples
+  # use awslogs-create-group.
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${NamePrefix}-task-execution"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+      Policies:
+        - PolicyName: create-log-groups
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: logs:CreateLogGroup
+                Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/ecs/${NamePrefix}-*"
+
+  # Application image as built from app/Dockerfile (used by the init container samples)
+  AppRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${NamePrefix}/app"
+      ImageTagMutability: MUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {"rules":[{"rulePriority":1,"description":"Keep the 10 most recent images","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":10},"action":{"type":"expire"}}]}
+
+  # Application image with the Falcon Container sensor embedded by falconutil patch-image
+  AppPatchedRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${NamePrefix}/app-falcon-patched"
+      ImageTagMutability: MUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {"rules":[{"rulePriority":1,"description":"Keep the 10 most recent images","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":10},"action":{"type":"expire"}}]}
+
+  # Private mirror of the Falcon Container sensor image, pulled by the init container at task start
+  FalconContainerRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${NamePrefix}/falcon-container"
+      ImageTagMutability: MUTABLE
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {"rules":[{"rulePriority":1,"description":"Keep the 5 most recent sensor versions","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":5},"action":{"type":"expire"}}]}
+
+  # Falcon-patched copy of quay.io/crowdstrike/detection-container, built once per sensor version
+  DetectionContainerRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${NamePrefix}/detection-container"
+      ImageTagMutability: MUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {"rules":[{"rulePriority":1,"description":"Keep the 5 most recent images","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":5},"action":{"type":"expire"}}]}
+
+  # ---------------------------------------------------------------------------------------------
+  # Detection container demo: a cluster and a small public network with no inbound access.
+  # Tasks get a public IP purely for outbound access to ECR and the Falcon cloud (no NAT gateway).
+
+  DemoCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Ref NamePrefix
+      ClusterSettings:
+        - Name: containerInsights
+          Value: disabled
+
+  DemoVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.42.0.0/24
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${NamePrefix}-demo"
+
+  DemoInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${NamePrefix}-demo"
+
+  DemoInternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref DemoVpc
+      InternetGatewayId: !Ref DemoInternetGateway
+
+  DemoPublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref DemoVpc
+      Tags:
+        - Key: Name
+          Value: !Sub "${NamePrefix}-demo-public"
+
+  DemoDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: DemoInternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref DemoPublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref DemoInternetGateway
+
+  DemoPublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref DemoVpc
+      CidrBlock: 10.42.0.0/25
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: !Sub "${NamePrefix}-demo-public-a"
+
+  DemoPublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref DemoVpc
+      CidrBlock: 10.42.0.128/25
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: !Sub "${NamePrefix}-demo-public-b"
+
+  DemoPublicSubnetARouteTable:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref DemoPublicSubnetA
+      RouteTableId: !Ref DemoPublicRouteTable
+
+  DemoPublicSubnetBRouteTable:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref DemoPublicSubnetB
+      RouteTableId: !Ref DemoPublicRouteTable
+
+  # No ingress rules: nothing can connect to the task. Egress is needed for ECR and the Falcon cloud.
+  DemoTaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${NamePrefix}-demo-task"
+      GroupDescription: Demo Fargate tasks - outbound only, no inbound access
+      VpcId: !Ref DemoVpc
+      SecurityGroupEgress:
+        - Description: Outbound to ECR and the CrowdStrike cloud
+          IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+
+  # One-time EventBridge Scheduler schedules in this group stop the detection task after an hour
+  DemoScheduleGroup:
+    Type: AWS::Scheduler::ScheduleGroup
+    Properties:
+      Name: !Ref NamePrefix
+
+  StopTaskSchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${NamePrefix}-stop-task-scheduler"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: stop-demo-tasks
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ecs:StopTask
+                Resource: !Sub "arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task/${DemoCluster}/*"
+
+  TerraformStateBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "${NamePrefix}-tfstate-${AWS::AccountId}-${AWS::Region}"
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-state-versions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 90
+
+  TerraformStateBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref TerraformStateBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt TerraformStateBucket.Arn
+              - !Sub "${TerraformStateBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+Outputs:
+  GitHubDeployRoleArn:
+    Description: Value for the AWS_ROLE_ARN repository variable
+    Value: !GetAtt GitHubDeployRole.Arn
+  TaskExecutionRoleArn:
+    Description: Value for the TASK_EXECUTION_ROLE_ARN repository variable
+    Value: !GetAtt TaskExecutionRole.Arn
+  TerraformStateBucketName:
+    Description: Value for the TF_STATE_BUCKET repository variable
+    Value: !Ref TerraformStateBucket
+  EcrRegistry:
+    Description: ECR registry hostname
+    Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.${AWS::URLSuffix}"
+  AppRepositoryUri:
+    Value: !GetAtt AppRepository.RepositoryUri
+  AppPatchedRepositoryUri:
+    Value: !GetAtt AppPatchedRepository.RepositoryUri
+  FalconContainerRepositoryUri:
+    Value: !GetAtt FalconContainerRepository.RepositoryUri
+  DetectionContainerRepositoryUri:
+    Value: !GetAtt DetectionContainerRepository.RepositoryUri
+  DemoClusterName:
+    Description: Value for the ECS_CLUSTER repository variable
+    Value: !Ref DemoCluster
+  DemoSubnetIds:
+    Description: Value for the DEMO_SUBNETS repository variable
+    Value: !Join [",", [!Ref DemoPublicSubnetA, !Ref DemoPublicSubnetB]]
+  DemoSecurityGroupId:
+    Description: Value for the DEMO_SECURITY_GROUP repository variable
+    Value: !Ref DemoTaskSecurityGroup
+  StopTaskSchedulerRoleArn:
+    Description: Value for the SCHEDULER_ROLE_ARN repository variable
+    Value: !GetAtt StopTaskSchedulerRole.Arn

@@ -1,0 +1,18 @@
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+terraform.tfvars
+
+# Pipeline artifacts
+build/
+fcs-*.sarif
+fcs-*.json
+falcon-container-sensor-pull.sh
+
+# Python
+__pycache__/
+*.pyc
