@@ -151,9 +151,12 @@ jobs:
           APP_IMAGE: ${{ steps.ecr.outputs.registry }}/${{ vars.NAME_PREFIX }}/app:${{ github.sha }}
         run: docker build --platform linux/amd64 -t "$APP_IMAGE" app
 
+      # Findings never stop the job here: the result is reported in the summary, the SARIF upload
+      # and the Falcon console, and the "Enforce image assessment policy" step decides what to do.
       - name: Scan image with Falcon Cloud Security
         id: image-scan
         uses: crowdstrike/fcs-action@v5.0.3
+        continue-on-error: true
         with:
           falcon_client_id: ${{ secrets.FALCON_CLIENT_ID }}
           falcon_region: ${{ vars.FALCON_CLOUD }}
