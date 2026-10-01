@@ -263,4 +263,9 @@ aws cloudformation delete-stack --stack-name ecs-fargate-demo-bootstrap   # the 
 | [actions/upload-artifact](https://github.com/actions/upload-artifact) / [actions/download-artifact](https://github.com/actions/download-artifact) | Passing the app image between jobs and keeping the scan reports |
 | [hashicorp/setup-terraform](https://github.com/hashicorp/setup-terraform) | Installing Terraform (sample 02) |
 
-This is a community sample, not an officially supported CrowdStrike product.
+## Support
+
+This repository is built and maintained by a CrowdStrike employee and shared as a community sample. It is not an officially supported CrowdStrike product, and it comes with no SLA.
+
+- For questions or problems with these samples, [open a GitHub issue](../../issues).
+- For help with the Falcon Container sensor, `falconutil`, the patching utility or your Falcon tenant, contact CrowdStrike Support through the Falcon console.
