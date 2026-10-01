@@ -2,8 +2,9 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
   One-time foundation for the CrowdStrike Falcon ECS Fargate pipeline samples.
   Creates the GitHub Actions OIDC trust, a least-privilege deploy role scoped to a single
-  repository and its GitHub environments, ECR repositories, a shared ECS task execution role
-  and an S3 bucket for Terraform state.
+  repository and its GitHub environments, ECR repositories, a shared ECS task execution role,
+  an S3 bucket for Terraform state, and a cluster, public network and stop-task scheduler for
+  the detection container demo.
 
 Parameters:
   GitHubOwner:
@@ -101,6 +102,7 @@ Resources:
                   - !GetAtt AppRepository.Arn
                   - !GetAtt AppPatchedRepository.Arn
                   - !GetAtt FalconContainerRepository.Arn
+                  - !GetAtt DetectionContainerRepository.Arn
               # ecs:RegisterTaskDefinition does not support resource-level permissions
               - Sid: EcsTaskDefinitions
                 Effect: Allow
@@ -124,6 +126,45 @@ Resources:
                 Condition:
                   StringEquals:
                     iam:PassedToService: ecs-tasks.amazonaws.com
+              # Detection container demo: run the task in the demo cluster only
+              - Sid: RunDetectionTask
+                Effect: Allow
+                Action: ecs:RunTask
+                Resource: !Sub "arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/${NamePrefix}-detection-container:*"
+                Condition:
+                  ArnEquals:
+                    ecs:cluster: !GetAtt DemoCluster.Arn
+              - Sid: ManageDemoTasks
+                Effect: Allow
+                Action:
+                  - ecs:DescribeTasks
+                  - ecs:StopTask
+                Resource: !Sub "arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task/${DemoCluster}/*"
+              - Sid: ListDemoTasks
+                Effect: Allow
+                Action: ecs:ListTasks
+                Resource: "*"
+                Condition:
+                  ArnEquals:
+                    ecs:cluster: !GetAtt DemoCluster.Arn
+              - Sid: StopTaskSchedules
+                Effect: Allow
+                Action:
+                  - scheduler:CreateSchedule
+                  - scheduler:DeleteSchedule
+                  - scheduler:GetSchedule
+                Resource: !Sub "arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/${DemoScheduleGroup}/*"
+              - Sid: ListStopTaskSchedules
+                Effect: Allow
+                Action: scheduler:ListSchedules
+                Resource: "*"
+              - Sid: PassSchedulerRole
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt StopTaskSchedulerRole.Arn
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: scheduler.amazonaws.com
               - Sid: LogGroupsDescribe
                 Effect: Allow
                 Action: logs:DescribeLogGroups
@@ -242,6 +283,144 @@ Resources:
         LifecyclePolicyText: |
           {"rules":[{"rulePriority":1,"description":"Keep the 5 most recent sensor versions","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":5},"action":{"type":"expire"}}]}
 
+  # Falcon-patched copy of quay.io/crowdstrike/detection-container, built once per sensor version
+  DetectionContainerRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${NamePrefix}/detection-container"
+      ImageTagMutability: MUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {"rules":[{"rulePriority":1,"description":"Keep the 5 most recent images","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":5},"action":{"type":"expire"}}]}
+
+  # ---------------------------------------------------------------------------------------------
+  # Detection container demo: a cluster and a small public network with no inbound access.
+  # Tasks get a public IP purely for outbound access to ECR and the Falcon cloud (no NAT gateway).
+
+  DemoCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Ref NamePrefix
+      ClusterSettings:
+        - Name: containerInsights
+          Value: disabled
+
+  DemoVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.42.0.0/24
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${NamePrefix}-demo"
+
+  DemoInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${NamePrefix}-demo"
+
+  DemoInternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref DemoVpc
+      InternetGatewayId: !Ref DemoInternetGateway
+
+  DemoPublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref DemoVpc
+      Tags:
+        - Key: Name
+          Value: !Sub "${NamePrefix}-demo-public"
+
+  DemoDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: DemoInternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref DemoPublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref DemoInternetGateway
+
+  DemoPublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref DemoVpc
+      CidrBlock: 10.42.0.0/25
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: !Sub "${NamePrefix}-demo-public-a"
+
+  DemoPublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref DemoVpc
+      CidrBlock: 10.42.0.128/25
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: !Sub "${NamePrefix}-demo-public-b"
+
+  DemoPublicSubnetARouteTable:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref DemoPublicSubnetA
+      RouteTableId: !Ref DemoPublicRouteTable
+
+  DemoPublicSubnetBRouteTable:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref DemoPublicSubnetB
+      RouteTableId: !Ref DemoPublicRouteTable
+
+  # No ingress rules: nothing can connect to the task. Egress is needed for ECR and the Falcon cloud.
+  DemoTaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${NamePrefix}-demo-task"
+      GroupDescription: Demo Fargate tasks - outbound only, no inbound access
+      VpcId: !Ref DemoVpc
+      SecurityGroupEgress:
+        - Description: Outbound to ECR and the CrowdStrike cloud
+          IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+
+  # One-time EventBridge Scheduler schedules in this group stop the detection task after an hour
+  DemoScheduleGroup:
+    Type: AWS::Scheduler::ScheduleGroup
+    Properties:
+      Name: !Ref NamePrefix
+
+  StopTaskSchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${NamePrefix}-stop-task-scheduler"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: stop-demo-tasks
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ecs:StopTask
+                Resource: !Sub "arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task/${DemoCluster}/*"
+
   TerraformStateBucket:
     Type: AWS::S3::Bucket
     DeletionPolicy: Retain
@@ -306,3 +485,17 @@ Outputs:
     Value: !GetAtt AppPatchedRepository.RepositoryUri
   FalconContainerRepositoryUri:
     Value: !GetAtt FalconContainerRepository.RepositoryUri
+  DetectionContainerRepositoryUri:
+    Value: !GetAtt DetectionContainerRepository.RepositoryUri
+  DemoClusterName:
+    Description: Value for the ECS_CLUSTER repository variable
+    Value: !Ref DemoCluster
+  DemoSubnetIds:
+    Description: Value for the DEMO_SUBNETS repository variable
+    Value: !Join [",", [!Ref DemoPublicSubnetA, !Ref DemoPublicSubnetB]]
+  DemoSecurityGroupId:
+    Description: Value for the DEMO_SECURITY_GROUP repository variable
+    Value: !Ref DemoTaskSecurityGroup
+  StopTaskSchedulerRoleArn:
+    Description: Value for the SCHEDULER_ROLE_ARN repository variable
+    Value: !GetAtt StopTaskSchedulerRole.Arn

@@ -7,6 +7,9 @@ name: CrowdStrike Falcon ECS Fargate samples
 #   03 - Task definition patch   (Falcon patching utility on a task definition JSON file)
 #   04 - CloudFormation patch    (Falcon patching utility on a CloudFormation template)
 #
+# Optionally (manual runs only) it also runs CrowdStrike's detection container as a Falcon-protected
+# Fargate task for an hour, so detections appear in the Falcon console.
+#
 # Each job writes a summary card to the run's Summary page showing what Falcon added.
 #
 # AWS access uses GitHub OIDC. Runs on main deploy automatically through the "aws-main"
@@ -21,6 +24,21 @@ on:
     - cron: "30 5 * * 0"
   workflow_dispatch:
     inputs:
+      sample:
+        description: Which deployment sample to run
+        type: choice
+        default: all
+        options:
+          - all
+          - 01-falconutil-patch-image
+          - 02-terraform-module
+          - 03-task-definition-patch
+          - 04-cloudformation-patch
+          - none
+      detection_container:
+        description: Also run the Falcon-protected detection container on Fargate for one hour to generate detections
+        type: boolean
+        default: false
       falcon_sensor_version:
         description: Falcon Container sensor version, e.g. 7.38.0-7703 (blank for latest)
         required: false
@@ -45,6 +63,8 @@ env:
   # demo continues past findings. Set it to "true" to block the pipeline on failed scans.
   ENFORCE_SCAN_RESULTS: ${{ vars.ENFORCE_SCAN_RESULTS || 'false' }}
   SOURCE_URL: ${{ github.server_url }}/${{ github.repository }}/blob/${{ github.sha }}
+  # Manual runs can pick one sample; push and scheduled runs run all of them
+  SAMPLE: ${{ inputs.sample || 'all' }}
 
 jobs:
   iac-scan:
@@ -61,6 +81,7 @@ jobs:
         env:
           DEPLOY_ENVIRONMENT: ${{ github.ref == 'refs/heads/main' && 'aws-main (runs automatically)' || 'aws-approval (waits for a reviewer)' }}
           SENSOR_VERSION: ${{ inputs.falcon_sensor_version || 'latest' }}
+          DETECTION_CONTAINER: ${{ inputs.detection_container && 'yes, runs for one hour' || 'no' }}
         run: |
           cat >> "$GITHUB_STEP_SUMMARY" <<EOF
           ## CrowdStrike Falcon on Amazon ECS Fargate
@@ -76,6 +97,8 @@ jobs:
           | Falcon cloud | \`${FALCON_CLOUD}\` |
           | Sensor version | \`${SENSOR_VERSION}\` |
           | Sensor grouping tags | \`${FALCON_SENSOR_TAGS:-none}\` |
+          | Samples | \`${SAMPLE}\` |
+          | Detection container | ${DETECTION_CONTAINER} |
           | Scan results enforced | \`${ENFORCE_SCAN_RESULTS}\` |
 
           EOF
@@ -225,6 +248,7 @@ jobs:
   sample-01-patched-image:
     name: "01: falconutil patch-image"
     needs: build
+    if: ${{ !inputs.sample || inputs.sample == 'all' || inputs.sample == '01-falconutil-patch-image' }}
     runs-on: ubuntu-24.04
     environment:
       name: ${{ github.ref == 'refs/heads/main' && 'aws-main' || 'aws-approval' }}
@@ -303,6 +327,7 @@ jobs:
   sample-02-terraform-module:
     name: "02: Terraform module"
     needs: build
+    if: ${{ !inputs.sample || inputs.sample == 'all' || inputs.sample == '02-terraform-module' }}
     runs-on: ubuntu-24.04
     environment:
       name: ${{ github.ref == 'refs/heads/main' && 'aws-main' || 'aws-approval' }}
@@ -381,6 +406,7 @@ jobs:
   sample-03-task-definition-patch:
     name: "03: Task definition patch"
     needs: build
+    if: ${{ !inputs.sample || inputs.sample == 'all' || inputs.sample == '03-task-definition-patch' }}
     runs-on: ubuntu-24.04
     environment:
       name: ${{ github.ref == 'refs/heads/main' && 'aws-main' || 'aws-approval' }}
@@ -483,6 +509,7 @@ jobs:
   sample-04-cloudformation-patch:
     name: "04: CloudFormation patch"
     needs: build
+    if: ${{ !inputs.sample || inputs.sample == 'all' || inputs.sample == '04-cloudformation-patch' }}
     runs-on: ubuntu-24.04
     environment:
       name: ${{ github.ref == 'refs/heads/main' && 'aws-main' || 'aws-approval' }}
@@ -589,3 +616,164 @@ jobs:
           $SUMMARY task-definition build/registered.json "04 · CloudFormation patch" \
             "[\`cloudformation.yaml\`](${SOURCE_URL}/samples/04-cloudformation-patch/cloudformation.yaml) patched by the Falcon patching utility, then deployed as stack \`$STACK_NAME\` with \`aws cloudformation deploy\`." \
             >> "$GITHUB_STEP_SUMMARY"
+
+  # Runs CrowdStrike's detection container (https://github.com/CrowdStrike/detection-container)
+  # as a Falcon-protected Fargate task so detections show up in the Falcon console. The task has a
+  # public IP for outbound access only (no inbound rules) and is stopped by a one-time EventBridge
+  # Scheduler schedule, so it shuts down even if this run is cancelled.
+  detection-container:
+    name: "Detection container: run for 1 hour"
+    needs: build
+    if: ${{ inputs.detection_container }}
+    runs-on: ubuntu-24.04
+    environment:
+      name: ${{ github.ref == 'refs/heads/main' && 'aws-main' || 'aws-approval' }}
+      deployment: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      SOURCE_IMAGE: quay.io/crowdstrike/detection-container:latest
+      RUNTIME_MINUTES: "60"
+      SENSOR_VERSION: ${{ needs.build.outputs.falcon_sensor_version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-session-name: github-${{ github.run_id }}-detection
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # The patched image is built once per sensor version and tag set, then reused
+      - name: Look for a prebuilt patched image
+        id: image
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          repo="${NAME_PREFIX}/detection-container"
+          tag="${SENSOR_VERSION}-$(printf '%s' "$FALCON_SENSOR_TAGS" | sha256sum | cut -c1-8)"
+          echo "uri=$REGISTRY/$repo:$tag" >> "$GITHUB_OUTPUT"
+          if aws ecr describe-images --repository-name "$repo" --image-ids imageTag="$tag" >/dev/null 2>&1; then
+            echo "Using prebuilt image $repo:$tag"
+            echo "prebuilt=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No prebuilt image for $tag yet; patching one now"
+            echo "prebuilt=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Pull the detection container
+        if: steps.image.outputs.prebuilt != 'true'
+        run: docker pull --quiet --platform linux/amd64 "$SOURCE_IMAGE"
+
+      - name: Patch the detection container with the Falcon Container sensor
+        if: steps.image.outputs.prebuilt != 'true'
+        uses: crowdstrike/falconutil-action@v1.1.0
+        with:
+          falcon_client_id: ${{ secrets.FALCON_CLIENT_ID }}
+          falcon_region: ${{ vars.FALCON_CLOUD }}
+          version: ${{ needs.build.outputs.falcon_sensor_version }}
+          cid: ${{ secrets.FALCON_CID }}
+          source_image_uri: ${{ env.SOURCE_IMAGE }}
+          target_image_uri: ${{ steps.image.outputs.uri }}
+          cloud_service: ECS_FARGATE
+          falconctl_opts: ${{ vars.FALCON_SENSOR_TAGS && format('--tags={0}', vars.FALCON_SENSOR_TAGS) || '' }}
+          image_pull_policy: IfNotPresent
+        env:
+          FALCON_CLIENT_SECRET: ${{ secrets.FALCON_CLIENT_SECRET }}
+
+      - name: Push patched image
+        if: steps.image.outputs.prebuilt != 'true'
+        run: docker push --quiet "${{ steps.image.outputs.uri }}"
+
+      - name: Register task definition
+        id: register
+        env:
+          DETECTION_IMAGE: ${{ steps.image.outputs.uri }}
+          TASK_EXECUTION_ROLE_ARN: ${{ vars.TASK_EXECUTION_ROLE_ARN }}
+        run: |
+          # shellcheck disable=SC2016 # envsubst takes a literal list of variables to replace
+          envsubst '${NAME_PREFIX} ${DETECTION_IMAGE} ${AWS_REGION} ${TASK_EXECUTION_ROLE_ARN}' \
+            < demo/detection-container/taskdefinition.json > taskdefinition.json
+          arn="$(aws ecs register-task-definition --cli-input-json file://taskdefinition.json \
+            --query taskDefinition.taskDefinitionArn --output text)"
+          echo "Registered $arn"
+          echo "arn=$arn" >> "$GITHUB_OUTPUT"
+
+      - name: Run the task
+        id: run
+        env:
+          CLUSTER: ${{ vars.ECS_CLUSTER }}
+          SUBNETS: ${{ vars.DEMO_SUBNETS }}
+          SECURITY_GROUP: ${{ vars.DEMO_SECURITY_GROUP }}
+        run: |
+          task="$(aws ecs run-task \
+            --cluster "$CLUSTER" \
+            --task-definition "${{ steps.register.outputs.arn }}" \
+            --launch-type FARGATE \
+            --network-configuration "awsvpcConfiguration={subnets=[$SUBNETS],securityGroups=[$SECURITY_GROUP],assignPublicIp=ENABLED}" \
+            --query 'tasks[0].taskArn' --output text)"
+          if [[ -z "$task" || "$task" == "None" ]]; then
+            echo "::error::RunTask did not start a task"
+            exit 1
+          fi
+          echo "Started $task, waiting for it to reach RUNNING"
+          if ! aws ecs wait tasks-running --cluster "$CLUSTER" --tasks "$task"; then
+            aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$task" \
+              --query 'tasks[0].{stoppedReason: stoppedReason, containers: containers[].{name: name, reason: reason, exitCode: exitCode}}'
+            echo "::error::The detection task did not reach RUNNING"
+            exit 1
+          fi
+          echo "task_arn=$task" >> "$GITHUB_OUTPUT"
+          echo "task_id=${task##*/}" >> "$GITHUB_OUTPUT"
+
+      - name: Schedule the task to stop in one hour
+        id: schedule
+        env:
+          CLUSTER: ${{ vars.ECS_CLUSTER }}
+          TASK_ARN: ${{ steps.run.outputs.task_arn }}
+          TASK_ID: ${{ steps.run.outputs.task_id }}
+          SCHEDULER_ROLE_ARN: ${{ vars.SCHEDULER_ROLE_ARN }}
+        run: |
+          stop_at="$(date -u -d "+${RUNTIME_MINUTES} minutes" +%Y-%m-%dT%H:%M:%S)"
+          target="$(jq -n --arg role "$SCHEDULER_ROLE_ARN" --arg cluster "$CLUSTER" --arg task "$TASK_ARN" '{
+            Arn: "arn:aws:scheduler:::aws-sdk:ecs:stopTask",
+            RoleArn: $role,
+            Input: ({Cluster: $cluster, Task: $task, Reason: "Detection demo finished (scheduled stop)"} | tojson)
+          }')"
+          # One-time schedule that deletes itself after it fires
+          aws scheduler create-schedule \
+            --name "stop-${TASK_ID}" \
+            --group-name "$NAME_PREFIX" \
+            --schedule-expression "at(${stop_at})" \
+            --schedule-expression-timezone UTC \
+            --flexible-time-window Mode=OFF \
+            --action-after-completion DELETE \
+            --target "$target" >/dev/null
+          echo "Task stops at ${stop_at} UTC"
+          echo "stop_at=${stop_at}" >> "$GITHUB_OUTPUT"
+
+      - name: Summarize the detection demo
+        env:
+          TASK_ID: ${{ steps.run.outputs.task_id }}
+          STOP_AT: ${{ steps.schedule.outputs.stop_at }}
+          CLUSTER: ${{ vars.ECS_CLUSTER }}
+          PREBUILT: ${{ steps.image.outputs.prebuilt == 'true' && 'reused the prebuilt patched image' || 'patched a new image' }}
+        run: |
+          aws ecs describe-task-definition --task-definition "${{ steps.register.outputs.arn }}" > registered.json
+          {
+            $SUMMARY task-definition registered.json "🚨 Detection container" \
+              "[CrowdStrike/detection-container](https://github.com/CrowdStrike/detection-container), Falcon-patched with \`falconutil patch-image\` ($PREBUILT)."
+            cat <<EOF
+          **Task:** [\`${TASK_ID}\`](https://${AWS_REGION}.console.aws.amazon.com/ecs/v2/clusters/${CLUSTER}/tasks/${TASK_ID}/configuration?region=${AWS_REGION}) is running · stops automatically at **${STOP_AT} UTC**
+
+          It runs every bundled detection scenario about 15 seconds apart, then triggers a random scenario every few minutes until it stops. In the Falcon console, the detections are tagged with the sensor grouping tag \`${FALCON_SENSOR_TAGS:-<none>}\`. To find the host, go to **Host setup and management → Manage endpoints → Host management** and filter on **Pod ID** = \`${TASK_ID}\`.
+
+          EOF
+          } >> "$GITHUB_STEP_SUMMARY"

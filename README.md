@@ -11,7 +11,9 @@ Pick the sample that matches how you already deploy to ECS:
 | 03 | [Task definition patch](samples/03-task-definition-patch) | The Falcon patching utility rewrites a task definition JSON file | Register task definitions from JSON (AWS CLI, ECS deploy actions, CodePipeline) |
 | 04 | [CloudFormation patch](samples/04-cloudformation-patch) | The Falcon patching utility rewrites a CloudFormation template | Manage ECS with CloudFormation |
 
-### How the sensor gets into the task
+An optional [detection container](#detection-container) stage runs CrowdStrike's [detection container](https://github.com/CrowdStrike/detection-container) as a Falcon-protected Fargate task for one hour, so you can see real detections in the Falcon console.
+
+## How the sensor gets into the task
 
 Samples 02 to 04 use the **init container** pattern. The application image is not modified. At task start, a non-essential Falcon init container copies the sensor into a shared volume. The application container then waits for it (`dependsOn: COMPLETE`), mounts the volume, launches through the Falcon entrypoint wrapper, and gets the `SYS_PTRACE` capability.
 
@@ -31,20 +33,21 @@ In both patterns, the sensor runs inside each application container and sends te
 iac-scan ──► build ──┬──► 01 falconutil patch-image ──► register task definition
                      ├──► 02 Terraform module         ──► terraform apply
                      ├──► 03 task definition patch    ──► register task definition
-                     └──► 04 CloudFormation patch     ──► cloudformation deploy
+                     ├──► 04 CloudFormation patch     ──► cloudformation deploy
+                     └──► detection container         ──► run task, stop it after one hour (optional)
 ```
 
 1. **iac-scan** scans this repository's Terraform, CloudFormation and task definitions with the [Falcon Cloud Security IaC scanner](https://github.com/CrowdStrike/fcs-action). It uploads the SARIF results to GitHub code scanning and to the Falcon console.
 2. **build** does the following:
    - Builds `app/` and scans the image with Falcon Cloud Security image assessment. Pass or fail comes from your **Image Assessment policy** in the Falcon console. The results go to the Falcon console, to GitHub code scanning as SARIF, and to a workflow artifact.
-   - Picks the Falcon Container sensor version, so all four samples use the same release.
-   - Passes the image to the sample jobs as a workflow artifact. This job has no AWS access, so it never needs approval.
+   - Picks the Falcon Container sensor version, so every sample uses the same release.
+   - Passes the image to the later jobs as a workflow artifact. This job has no AWS access.
 3. **Samples 01-04** run in parallel, and each job is a complete recipe you can copy:
    - It signs in to AWS, then pushes the app image to Amazon ECR using [`.github/actions/publish-images`](.github/actions/publish-images/action.yml).
    - The init container samples (02-04) also mirror the Falcon Container sensor into a private ECR repository using [`falcon-container-sensor-pull.sh`](https://github.com/CrowdStrike/falcon-scripts/tree/main/bash/containers/falcon-container-sensor-pull). The sensor is multi-architecture, and Fargate pulls it at task start.
    - It then registers a Falcon-protected task definition.
 
-The samples register task definitions only. They do not create clusters or services, so they cost almost nothing to run. To start a protected task, use any of the resulting task definitions with your own cluster and network:
+The samples register task definitions only; they don't create services. To start a protected task, use any of the resulting task definitions with your own cluster and network:
 
 ```bash
 aws ecs run-task --cluster <cluster> --launch-type FARGATE \
@@ -52,33 +55,47 @@ aws ecs run-task --cluster <cluster> --launch-type FARGATE \
   --network-configuration 'awsvpcConfiguration={subnets=[subnet-xxxx],securityGroups=[sg-xxxx],assignPublicIp=ENABLED}'
 ```
 
-The task needs outbound access (a public IP or NAT) to reach ECR and the Falcon cloud. Once the task is running, the sensor registers with your Falcon tenant and shows up in host management.
+The task needs outbound access (a public IP or NAT) to reach ECR and the Falcon cloud. Once it's running, the sensor registers with your Falcon tenant and appears in host management.
 
-## Following a run in GitHub Actions
+### Running a single sample
 
-Each run's **Summary** page is written to be presented as-is, from top to bottom:
+Pushes to `main` and the weekly scheduled run build all four samples. To run just one, start **Actions → CrowdStrike Falcon ECS Fargate samples → Run workflow** and choose it under **sample**. Choose `none` to run only the scans, or only the detection container. To pin the sensor version, set **falcon_sensor_version** (for example `8.10.0-8002`). Leave it blank to use the latest release.
 
-1. **Run overview:** what triggered the run, which AWS environment it used, the Falcon cloud, the sensor version and the grouping tags.
-2. **Scan results:** IaC findings and image vulnerabilities by severity, with the top issues in expandable lists. Both scans also appear under **Security → Code scanning**, where you can filter by the `crowdstrike-fcs-iac` and `crowdstrike-fcs-image` categories.
-3. **Sensor version:** which Falcon Container sensor release all four samples use.
-4. **One card per sample,** all built from the task definition that ECS actually registered, so the four methods can be compared directly:
-   - The containers and their start order, including the Falcon init container where one is used.
-   - How each application container launches, for example `Falcon wrapper → python app.py`.
-   - The Falcon settings: `SYS_PTRACE`, the sensor volume mounts and the sensor configuration (`FALCONCTL_OPTS` with the CID and tags).
-   - A link to the task definition in the AWS console.
-   - For sample 01, a before and after view of the image's entrypoint and environment.
+### Run summary
 
-Your CID is redacted and the AWS account ID is hidden, so the page is safe to share on screen. In the job logs, noisy output such as the full patch diffs and the sensor download is folded into collapsed groups. The run graph (`iac-scan → build → 01 | 02 | 03 | 04`) shows the four methods running side by side.
+Each run's **Summary** page shows:
 
-### Demo findings and scan enforcement
+- the scan results, with IaC findings and image vulnerabilities counted by severity (image vulnerabilities by both ExPRT rating and CVSS)
+- the sensor version
+- one card per sample, built from the task definition ECS registered, showing what Falcon added:
+  - the containers and their start order
+  - how each application container launches (for example `Falcon wrapper → python app.py`)
+  - the `SYS_PTRACE` capability, the sensor volume mounts and the sensor configuration
+  - a link to the task definition in the AWS console
+  - for sample 01, a before and after of the image's entrypoint and environment
 
-The demo app is **intentionally a little out of date** so the image assessment has something to show. It uses the `python:3.12.7-alpine3.20` base image and older Flask, Werkzeug, Jinja2, waitress and click releases, with a handful of known CVEs; see [`app/requirements.txt`](app/requirements.txt). All scanning in this repository uses CrowdStrike Falcon Cloud Security; GitHub Dependabot, secret scanning and CodeQL are not enabled. Bump them to current releases before you reuse the app for anything else.
+The CID is redacted and ECR hostnames are shortened, so the summary doesn't expose tenant or account identifiers. Scan findings also appear under **Security → Code scanning**, in the `crowdstrike-fcs-iac` and `crowdstrike-fcs-image` categories.
 
-By default, failed scans **warn and the pipeline keeps going**. This means a vulnerable image still reaches the four samples, and the findings stay visible in the summary. To block on failed scans instead (the IaC `fail_on` thresholds or the Image Assessment policy), set:
+### Sample app versions and scan enforcement
+
+The sample app deliberately pins slightly older releases, so the image assessment has real findings to report: the `python:3.12.7-alpine3.20` base image, plus Flask, Werkzeug, Jinja2, waitress and click. See [`app/requirements.txt`](app/requirements.txt). Update them to current releases before you reuse the app. All scanning in this repository uses CrowdStrike Falcon Cloud Security.
+
+By default, failed scans add a warning and the pipeline keeps going. To block the pipeline on failed scans (the IaC `fail_on` thresholds or the Image Assessment policy), set:
 
 ```bash
 gh variable set ENFORCE_SCAN_RESULTS --body true
 ```
+
+## Detection container
+
+Tick **detection_container** when you start **Run workflow** to add this stage. It runs CrowdStrike's [detection container](https://github.com/CrowdStrike/detection-container) on Fargate with Falcon protection:
+
+- **Image:** `quay.io/crowdstrike/detection-container` is patched with `falconutil patch-image` and stored in the `ecs-fargate-demo/detection-container` ECR repository. The image is tagged with the sensor version and the sensor tags, so later runs reuse it and start in seconds.
+- **Activity:** the task first runs every bundled detection scenario, about 15 seconds apart. Examples include credential dumping, a reverse shell, ransomware-style file encryption and container drift. After that, it keeps triggering a random scenario every few minutes.
+- **Networking:** the task runs in a small VPC that the bootstrap creates. It has public subnets and a security group with **no inbound rules**. The task gets a public IP purely so it can reach ECR and the CrowdStrike cloud without a NAT gateway.
+- **Automatic stop:** a one-time EventBridge Scheduler schedule stops the task after **one hour**, then deletes itself. The stop happens even if the GitHub run is cancelled. The task costs a few cents for the hour.
+
+The run summary links to the running task and shows when it will stop. In the Falcon console, the detections carry your sensor grouping tag. You can find the host under **Host setup and management → Manage endpoints → Host management** by filtering on **Pod ID** (the ECS task ID).
 
 ## Security model
 
@@ -90,12 +107,14 @@ AWS access uses **GitHub OIDC**, so no long-lived AWS keys are stored in GitHub.
 
   Tokens for pull requests, other branches, tags and other repositories are rejected.
 - **`aws-main`** has a deployment branch policy that allows only `main`. Pushes to `main` and the weekly scheduled run deploy automatically.
-- **`aws-approval`** has a required reviewer. Any run from another branch (via **Run workflow** / `workflow_dispatch`) pauses until the reviewer approves. There is one approval per run: only the four sample jobs use AWS, and they wait on the gate together, so one **Review deployments** click releases them all. The environments are configured with `deployment: false`. Required reviewers still apply, but no GitHub deployment records are created.
+- **`aws-approval`** has a required reviewer. Any run from another branch (via **Run workflow**) pauses until a reviewer approves it. Only the AWS jobs (the samples and the detection container) use the environment. They wait on it together, so one approval releases them all. The environments are referenced with `deployment: false`: required reviewers still apply, but GitHub creates no deployment records.
 - The workflow has **no `pull_request` trigger**. The repository also requires approval before workflows run for outside contributors.
-- The role's permissions are scoped to the sample's resources:
-  - Push/pull on three ECR repositories
+- The role's permissions are scoped to this repository's resources:
+  - Push and pull on its ECR repositories
   - Registering ECS task definitions
-  - `iam:PassRole` on the single task execution role
+  - Running the detection container task definition in the demo cluster only, and describing or stopping tasks in that cluster
+  - `iam:PassRole` on the task execution role and the stop-task scheduler role only
+  - Creating and deleting EventBridge Scheduler schedules in the `ecs-fargate-demo` schedule group
   - Log groups under `/ecs/ecs-fargate-demo-*`
   - The Terraform state bucket
   - The single sample CloudFormation stack, `ecs-fargate-demo-cloudformation-patch`. The role can't touch the bootstrap stack that defines it.
@@ -130,12 +149,12 @@ FALCON_SENSOR_TAGS=cs-myteam-ecs-demo bootstrap/setup.sh <owner>/<repo>
 
 1. Deploys [`bootstrap/bootstrap.yaml`](bootstrap/bootstrap.yaml), which creates:
    - The GitHub OIDC provider (it reuses one that already exists in the account)
-   - The deploy role
-   - ECR repositories for `app`, `app-falcon-patched` and `falcon-container`
-   - A shared task execution role
+   - The deploy role and a shared task execution role
+   - ECR repositories for `app`, `app-falcon-patched`, `falcon-container` and `detection-container`
    - A versioned, encrypted S3 bucket for Terraform state, using native S3 locking
+   - For the detection container: an ECS cluster, a VPC with two public subnets and an outbound-only security group, an EventBridge Scheduler group, and the role it uses to stop tasks. None of these cost anything while idle.
 2. Creates the `aws-main` and `aws-approval` GitHub environments with the protections described above.
-3. Stores the stack outputs as repository variables: `AWS_REGION`, `AWS_ROLE_ARN`, `TASK_EXECUTION_ROLE_ARN`, `TF_STATE_BUCKET`, `NAME_PREFIX`, `FALCON_CLOUD` and (when set) `FALCON_SENSOR_TAGS`.
+3. Stores the stack outputs as repository variables: `AWS_REGION`, `AWS_ROLE_ARN`, `TASK_EXECUTION_ROLE_ARN`, `TF_STATE_BUCKET`, `NAME_PREFIX`, `FALCON_CLOUD`, `ECS_CLUSTER`, `DEMO_SUBNETS`, `DEMO_SECURITY_GROUP`, `SCHEDULER_ROLE_ARN` and (when set) `FALCON_SENSOR_TAGS`.
 
 ### 2. Add your CrowdStrike credentials
 
@@ -147,7 +166,7 @@ gh secret set FALCON_CID   # your CID including the checksum, e.g. 1234567890ABC
 
 ### 3. Run it
 
-Push to `main`, or start **Actions > CrowdStrike Falcon ECS Fargate samples > Run workflow**. The workflow uses the latest sensor by default. To pin a sensor version, set the `falcon_sensor_version` input (for example `7.38.0-7703`).
+Push to `main`, or start **Actions → CrowdStrike Falcon ECS Fargate samples → Run workflow**.
 
 ## Adapting a sample to your application
 
@@ -159,15 +178,15 @@ Push to `main`, or start **Actions > CrowdStrike Falcon ECS Fargate samples > Ru
 
 ## Sensor grouping tags
 
-Sensor grouping tags let you target these containers with Falcon host groups and policies, and filter them in the console. The pipeline reads a comma-separated list from the `FALCON_SENSOR_TAGS` repository variable and applies it to every sample:
+Sensor grouping tags let you target these containers with Falcon host groups and policies, and filter them in the console. The pipeline reads a comma-separated list from the `FALCON_SENSOR_TAGS` repository variable and applies it everywhere:
 
 | Sample | How the tags are set | Resulting setting |
 |--------|----------------------|-------------------|
-| 01 falconutil patch-image | `falconctl_opts: --tags=<tags>` on `falconutil-action` | Built into the patched image |
+| 01 falconutil patch-image, detection container | `falconctl_opts: --tags=<tags>` on `falconutil-action` | Built into the patched image |
 | 02 Terraform module | `falcon_additional_opts = "--tags=<tags>"` (from the `falcon_sensor_tags` variable) | `FALCONCTL_OPTS=--cid=<CID> --tags=<tags>` |
 | 03 / 04 patching utility | `-falconctl-opts "--tags=<tags>"` | `FALCONCTL_OPTS=--tags=<tags> --cid=<CID>` |
 
-All four samples follow CrowdStrike's documented method and pass tags as the `falconctl --tags` option. For the init container samples, the option ends up in the application container's `FALCONCTL_OPTS` environment variable. To change the tags:
+All of them follow CrowdStrike's documented method and pass tags as the `falconctl --tags` option. To change the tags:
 
 ```bash
 gh variable set FALCON_SENSOR_TAGS --body "cs-myteam-ecs-demo,production"
@@ -176,32 +195,37 @@ gh variable set FALCON_SENSOR_TAGS --body "cs-myteam-ecs-demo,production"
 ## Repository layout
 
 ```text
-app/                  Demo Flask application and Dockerfile
-docs/images/          Architecture diagrams
-bootstrap/            One-time AWS (CloudFormation) and GitHub setup
+app/                         Sample Flask application and Dockerfile
+bootstrap/                   One-time AWS (CloudFormation) and GitHub setup
+demo/detection-container/    Task definition for the Falcon-protected detection container
+docs/images/                 Architecture diagrams
 samples/
   01-falconutil-patched-image/   Task definition for the falconutil-patched image
   02-terraform-module/           Terraform using CrowdStrike/terraform-aws-ecs-fargate
   03-task-definition-patch/      Task definition JSON patched by the Falcon utility
   04-cloudformation-patch/       CloudFormation template patched by the Falcon utility
-.github/workflows/    The pipeline and the demo teardown
-.github/scripts/      Job summary renderer used by the pipeline
+.github/workflows/           The pipeline and the teardown workflow
+.github/actions/             Composite action that publishes images to ECR
+.github/scripts/             Job summary renderer
 ```
 
 ## Clean up
 
-**To reset between demos,** run **Actions → CrowdStrike Falcon ECS Fargate samples - teardown → Run workflow**. It:
+**To remove what the pipeline deployed,** run **Actions → CrowdStrike Falcon ECS Fargate samples - teardown → Run workflow**. It:
 
+- stops any running detection container task and deletes its stop schedule
 - deletes the CloudFormation sample stack
 - runs `terraform destroy` for sample 02
-- deregisters the task definitions for samples 01 and 03 and deletes their log groups
+- deregisters the task definitions for samples 01 and 03 and the detection container, and deletes their log groups
 
-The bootstrap stack, ECR repositories and Terraform state stay in place, so the next run starts straight away. Like the main workflow, the teardown runs automatically from `main` and needs approval from any other branch.
+The bootstrap stack, ECR repositories and Terraform state stay in place, so the pipeline can run again straight away. Like the main workflow, the teardown runs automatically from `main` and needs approval from any other branch.
 
 **To remove everything,** run the teardown first, then use admin credentials:
 
 ```bash
-aws ecr delete-repository --force --repository-name ecs-fargate-demo/app   # repeat for app-falcon-patched, falcon-container
+for repo in app app-falcon-patched falcon-container detection-container; do
+  aws ecr delete-repository --force --repository-name "ecs-fargate-demo/$repo"
+done
 aws cloudformation delete-stack --stack-name ecs-fargate-demo-bootstrap   # the state bucket is retained
 ```
 
@@ -216,9 +240,10 @@ aws cloudformation delete-stack --stack-name ecs-fargate-demo-bootstrap   # the 
 | Tool | Used for |
 |------|----------|
 | [CrowdStrike/fcs-action](https://github.com/CrowdStrike/fcs-action) | IaC scanning and container image assessment with the Falcon Cloud Security CLI |
-| [CrowdStrike/falconutil-action](https://github.com/CrowdStrike/falconutil-action) | `falconutil patch-image` (sample 01) |
+| [CrowdStrike/falconutil-action](https://github.com/CrowdStrike/falconutil-action) | `falconutil patch-image` (sample 01 and the detection container) |
 | [CrowdStrike/terraform-aws-ecs-fargate](https://github.com/CrowdStrike/terraform-aws-ecs-fargate) | Terraform module for Falcon-protected task definitions (sample 02) |
 | [falcon-container-sensor-pull.sh](https://github.com/CrowdStrike/falcon-scripts/tree/main/bash/containers/falcon-container-sensor-pull) | Mirroring the Falcon Container sensor image into Amazon ECR (from [CrowdStrike/falcon-scripts](https://github.com/CrowdStrike/falcon-scripts)) |
+| [CrowdStrike/detection-container](https://github.com/CrowdStrike/detection-container) | Generating sample detections on a protected Fargate task |
 
 **Third-party actions used by the pipeline**
 
@@ -227,8 +252,8 @@ aws cloudformation delete-stack --stack-name ecs-fargate-demo-bootstrap   # the 
 | [actions/checkout](https://github.com/actions/checkout) | Checking out the repository |
 | [aws-actions/configure-aws-credentials](https://github.com/aws-actions/configure-aws-credentials) | Assuming the AWS role via GitHub OIDC |
 | [aws-actions/amazon-ecr-login](https://github.com/aws-actions/amazon-ecr-login) | Docker login to Amazon ECR |
-| [github/codeql-action](https://github.com/github/codeql-action) (`upload-sarif`) | Publishing IaC scan results to GitHub code scanning |
-| [actions/upload-artifact](https://github.com/actions/upload-artifact) | Keeping the image scan report as a workflow artifact |
+| [github/codeql-action](https://github.com/github/codeql-action) (`upload-sarif`) | Publishing scan results to GitHub code scanning |
+| [actions/upload-artifact](https://github.com/actions/upload-artifact) / [actions/download-artifact](https://github.com/actions/download-artifact) | Passing the app image between jobs and keeping the scan reports |
 | [hashicorp/setup-terraform](https://github.com/hashicorp/setup-terraform) | Installing Terraform (sample 02) |
 
 This is a community sample, not an officially supported CrowdStrike product.

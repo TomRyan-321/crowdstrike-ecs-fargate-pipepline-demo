@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # One-time setup for the CrowdStrike Falcon ECS Fargate pipeline samples.
 #
-#   1. Deploys bootstrap.yaml (OIDC provider, deploy role, ECR, execution role, TF state bucket)
+#   1. Deploys bootstrap.yaml (OIDC provider, deploy role, ECR, execution role, TF state bucket,
+#      and the cluster, public network and scheduler role for the detection container demo)
 #   2. Creates the two GitHub environments that gate access to the AWS role:
 #        aws-main     - main branch only, runs without approval
 #        aws-approval - any other branch, requires approval from REVIEWER
@@ -90,6 +91,10 @@ gh variable set AWS_ROLE_ARN --repo "$REPO" --body "$(output GitHubDeployRoleArn
 gh variable set TASK_EXECUTION_ROLE_ARN --repo "$REPO" --body "$(output TaskExecutionRoleArn)"
 gh variable set TF_STATE_BUCKET --repo "$REPO" --body "$(output TerraformStateBucketName)"
 gh variable set NAME_PREFIX --repo "$REPO" --body "$NAME_PREFIX"
+gh variable set ECS_CLUSTER --repo "$REPO" --body "$(output DemoClusterName)"
+gh variable set DEMO_SUBNETS --repo "$REPO" --body "$(output DemoSubnetIds)"
+gh variable set DEMO_SECURITY_GROUP --repo "$REPO" --body "$(output DemoSecurityGroupId)"
+gh variable set SCHEDULER_ROLE_ARN --repo "$REPO" --body "$(output StopTaskSchedulerRoleArn)"
 gh variable set FALCON_CLOUD --repo "$REPO" --body "$FALCON_CLOUD"
 if [[ -n "$FALCON_SENSOR_TAGS" ]]; then
     gh variable set FALCON_SENSOR_TAGS --repo "$REPO" --body "$FALCON_SENSOR_TAGS"

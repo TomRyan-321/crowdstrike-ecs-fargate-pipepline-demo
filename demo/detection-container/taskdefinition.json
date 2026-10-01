@@ -1,0 +1,42 @@
+{
+    "family": "${NAME_PREFIX}-detection-container",
+    "networkMode": "awsvpc",
+    "requiresCompatibilities": ["FARGATE"],
+    "runtimePlatform": {
+        "cpuArchitecture": "X86_64",
+        "operatingSystemFamily": "LINUX"
+    },
+    "cpu": "512",
+    "memory": "1024",
+    "executionRoleArn": "${TASK_EXECUTION_ROLE_ARN}",
+    "containerDefinitions": [
+        {
+            "name": "detection-container",
+            "image": "${DETECTION_IMAGE}",
+            "essential": true,
+            "command": [
+                "for f in /home/eval/bin/*.sh; do echo \"=== $(basename \"$f\")\"; sh -c 'echo CS_testcontainer'; timeout 120 \"$f\" || true; sleep 15; done; exec /home/menu/auto"
+            ],
+            "linuxParameters": {
+                "capabilities": {
+                    "add": ["SYS_PTRACE"]
+                }
+            },
+            "logConfiguration": {
+                "logDriver": "awslogs",
+                "options": {
+                    "awslogs-group": "/ecs/${NAME_PREFIX}-detection-container",
+                    "awslogs-region": "${AWS_REGION}",
+                    "awslogs-create-group": "true",
+                    "awslogs-stream-prefix": "detection-container"
+                }
+            }
+        }
+    ],
+    "tags": [
+        {
+            "key": "sample",
+            "value": "detection-container"
+        }
+    ]
+}

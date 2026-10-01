@@ -1,7 +1,8 @@
 name: CrowdStrike Falcon ECS Fargate samples - teardown
 
-# Resets the demo: removes everything the samples workflow deploys (the CloudFormation stack,
-# the Terraform-managed task definition, registered task definitions and their log groups).
+# Removes everything the samples workflow deploys (a running detection container
+# task, the CloudFormation stack, the Terraform-managed task definition, registered task definitions
+# and their log groups).
 # The bootstrap stack, ECR repositories and Terraform state bucket are left in place.
 
 on:
@@ -45,6 +46,23 @@ jobs:
       - name: Write summary header
         run: echo "## Demo teardown" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: "Detection container: stop running tasks and their schedules"
+        env:
+          CLUSTER: ${{ vars.ECS_CLUSTER }}
+        run: |
+          family="${NAME_PREFIX}-detection-container"
+          tasks="$(aws ecs list-tasks --cluster "$CLUSTER" --family "$family" --query 'taskArns[]' --output text)"
+          count=0
+          for task in $tasks; do
+            aws ecs stop-task --cluster "$CLUSTER" --task "$task" --reason "Demo teardown" >/dev/null
+            count=$((count + 1))
+          done
+          schedules="$(aws scheduler list-schedules --group-name "$NAME_PREFIX" --query 'Schedules[].Name' --output text)"
+          for schedule in $schedules; do
+            aws scheduler delete-schedule --group-name "$NAME_PREFIX" --name "$schedule"
+          done
+          echo "- Detection container: stopped $count task(s), removed $(wc -w <<< "$schedules") stop schedule(s)" >> "$GITHUB_STEP_SUMMARY"
+
       - name: "04: Delete CloudFormation stack"
         run: |
           stack="${NAME_PREFIX}-cloudformation-patch"
@@ -78,9 +96,9 @@ jobs:
           terraform destroy -auto-approve
           echo "- 02: destroyed Terraform resources" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: "01, 03: Deregister task definitions and delete log groups"
+      - name: "01, 03, detection container: deregister task definitions and delete log groups"
         run: |
-          for sample in patched-image task-definition-patch; do
+          for sample in patched-image task-definition-patch detection-container; do
             family="${NAME_PREFIX}-${sample}"
             arns="$(aws ecs list-task-definitions --family-prefix "$family" --status ACTIVE \
               --query 'taskDefinitionArns[]' --output text)"

@@ -9,7 +9,7 @@ Every subcommand prints Markdown to stdout; the workflow appends it to $GITHUB_S
   summary.py task-definition <describe-task-definition.json> <title> <description>
 
 Values that identify the Falcon tenant (CID, provisioning tokens) are redacted, and ECR
-registry hostnames are shortened so the AWS account ID is not shown on screen.
+registry hostnames are shortened so summaries do not expose the AWS account ID.
 """
 
 import json
