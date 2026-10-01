@@ -49,7 +49,7 @@ env:
 jobs:
   iac-scan:
     name: Scan IaC with Falcon Cloud Security
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       security-events: write
@@ -118,42 +118,25 @@ jobs:
           echo "::warning::$message. Continuing because ENFORCE_SCAN_RESULTS is not true."
           echo "> ⚠️ Not enforced for this run: the pipeline continues." >> "$GITHUB_STEP_SUMMARY"
 
+  # No AWS access here, so this job needs no approval. The image is handed to the sample jobs as an
+  # artifact; each sample publishes what it needs to ECR, so a branch run waits for one approval.
   build:
-    name: Build, scan and push image
+    name: Build and scan image
     needs: iac-scan
-    runs-on: ubuntu-latest
-    # deployment: false keeps the approval gate and the OIDC environment claim without creating
-    # GitHub deployment records; parallel jobs waiting on deployment records can't be approved.
-    environment:
-      name: ${{ github.ref == 'refs/heads/main' && 'aws-main' || 'aws-approval' }}
-      deployment: false
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
-      id-token: write
       security-events: write
     outputs:
-      app_image: ${{ steps.push.outputs.app_image }}
-      falcon_image: ${{ steps.sensor.outputs.falcon_image }}
       falcon_sensor_version: ${{ steps.sensor.outputs.version }}
+    env:
+      IMAGE: app:${{ github.sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          role-session-name: github-${{ github.run_id }}-build
-          aws-region: ${{ vars.AWS_REGION }}
-
-      - name: Log in to Amazon ECR
-        id: ecr
-        uses: aws-actions/amazon-ecr-login@v2
-
       - name: Build image
-        env:
-          APP_IMAGE: ${{ steps.ecr.outputs.registry }}/${{ vars.NAME_PREFIX }}/app:${{ github.sha }}
-        run: docker build --platform linux/amd64 -t "$APP_IMAGE" app
+        run: docker build --platform linux/amd64 -t "$IMAGE" app
 
       # Findings never stop the job here: the result is reported in the summary, the SARIF upload
       # and the Falcon console, and the "Enforce image assessment policy" step decides what to do.
@@ -165,7 +148,7 @@ jobs:
           falcon_client_id: ${{ secrets.FALCON_CLIENT_ID }}
           falcon_region: ${{ vars.FALCON_CLOUD }}
           scan_type: image
-          image: ${{ steps.ecr.outputs.registry }}/${{ vars.NAME_PREFIX }}/app:${{ github.sha }}
+          image: app:${{ github.sha }}
           platform: linux/amd64
           # The action scans to fcs-image-scan.json and converts it to this SARIF file
           report_formats: sarif
@@ -176,9 +159,7 @@ jobs:
 
       - name: Summarize image scan
         if: always() && steps.image-scan.outcome != 'skipped'
-        env:
-          APP_IMAGE: ${{ steps.ecr.outputs.registry }}/${{ vars.NAME_PREFIX }}/app:${{ github.sha }}
-        run: $SUMMARY image-scan fcs-image-scan.json "${{ steps.image-scan.outputs.exit-code }}" "$APP_IMAGE" >> "$GITHUB_STEP_SUMMARY"
+        run: $SUMMARY image-scan fcs-image-scan.json "${{ steps.image-scan.outputs.exit-code }}" "$IMAGE" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload image scan SARIF to GitHub code scanning
         if: always() && hashFiles('fcs-image-scan.sarif') != ''
@@ -204,65 +185,47 @@ jobs:
             exit 1
           fi
           echo "::warning::$message. Continuing because ENFORCE_SCAN_RESULTS is not true."
-          echo "> ⚠️ Not enforced for this run: the image is still pushed so the samples can deploy it." >> "$GITHUB_STEP_SUMMARY"
+          echo "> ⚠️ Not enforced for this run: the samples still deploy this image." >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Push image
-        id: push
-        env:
-          APP_IMAGE: ${{ steps.ecr.outputs.registry }}/${{ vars.NAME_PREFIX }}/app:${{ github.sha }}
-        run: |
-          docker push --quiet "$APP_IMAGE"
-          echo "app_image=$APP_IMAGE" >> "$GITHUB_OUTPUT"
-
-      # Init container samples (02-04) pull the sensor at task start, so mirror it into private ECR
-      - name: Mirror Falcon Container sensor to ECR
+      # Resolved once so every sample uses the same sensor release
+      - name: Resolve Falcon Container sensor version
         id: sensor
         env:
           FALCON_CLIENT_ID: ${{ secrets.FALCON_CLIENT_ID }}
           FALCON_CLIENT_SECRET: ${{ secrets.FALCON_CLIENT_SECRET }}
           FALCON_SENSOR_VERSION: ${{ inputs.falcon_sensor_version }}
-          MIRROR_REPO: ${{ steps.ecr.outputs.registry }}/${{ vars.NAME_PREFIX }}/falcon-container
         run: |
           curl -fsSL -o falcon-container-sensor-pull.sh \
             "https://raw.githubusercontent.com/CrowdStrike/falcon-scripts/${FALCON_SCRIPTS_VERSION}/bash/containers/falcon-container-sensor-pull/falcon-container-sensor-pull.sh"
-
           args=(--region "$FALCON_CLOUD" --type falcon-container)
           if [[ -n "$FALCON_SENSOR_VERSION" ]]; then
             args+=(--version "$FALCON_SENSOR_VERSION")
           fi
-
-          echo "::group::Resolve sensor version"
           source_image="$(bash falcon-container-sensor-pull.sh "${args[@]}" --get-image-path | tail -n 1)"
           version="${source_image##*:}"
-          echo "::endgroup::"
           echo "Falcon Container sensor: $version"
-
-          if aws ecr describe-images --repository-name "${NAME_PREFIX}/falcon-container" \
-              --image-ids imageTag="$version" >/dev/null 2>&1; then
-            status="already mirrored"
-          else
-            echo "::group::Copy sensor image to ECR"
-            # No --platform: copies the multi-architecture image (x86_64 and ARM64)
-            bash falcon-container-sensor-pull.sh "${args[@]}" --version "$version" \
-              --copy "$MIRROR_REPO" --copy-omit-image-name
-            echo "::endgroup::"
-            status="copied from the CrowdStrike registry"
-          fi
-          echo "Mirror: $status"
-
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "falcon_image=$MIRROR_REPO:$version" >> "$GITHUB_OUTPUT"
           cat >> "$GITHUB_STEP_SUMMARY" <<EOF
           ### 📦 Falcon Container sensor
 
-          Version \`$version\` is in \`<ecr>/${NAME_PREFIX}/falcon-container\` ($status). Samples 02 to 04 pull it at task start.
+          All samples use version \`$version\`. Samples 02 to 04 pull it from \`<ecr>/${NAME_PREFIX}/falcon-container\` at task start.
 
           EOF
+
+      - name: Save image for the sample jobs
+        run: docker save "$IMAGE" | gzip > app-image.tar.gz
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: app-image
+          path: app-image.tar.gz
+          retention-days: 1
 
   sample-01-patched-image:
     name: "01: falconutil patch-image"
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment:
       name: ${{ github.ref == 'refs/heads/main' && 'aws-main' || 'aws-approval' }}
       deployment: false
@@ -284,8 +247,12 @@ jobs:
         id: ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Pull application image
-        run: docker pull --quiet --platform linux/amd64 "${{ needs.build.outputs.app_image }}"
+      - name: Publish application image to ECR
+        id: publish
+        uses: ./.github/actions/publish-images
+        with:
+          registry: ${{ steps.ecr.outputs.registry }}
+          name-prefix: ${{ vars.NAME_PREFIX }}
 
       - name: Patch image with the Falcon Container sensor
         uses: crowdstrike/falconutil-action@v1.1.0
@@ -294,7 +261,7 @@ jobs:
           falcon_region: ${{ vars.FALCON_CLOUD }}
           version: ${{ needs.build.outputs.falcon_sensor_version }}
           cid: ${{ secrets.FALCON_CID }}
-          source_image_uri: ${{ needs.build.outputs.app_image }}
+          source_image_uri: ${{ steps.publish.outputs.app-image }}
           target_image_uri: ${{ steps.ecr.outputs.registry }}/${{ vars.NAME_PREFIX }}/app-falcon-patched:${{ github.sha }}
           cloud_service: ECS_FARGATE
           falconctl_opts: ${{ vars.FALCON_SENSOR_TAGS && format('--tags={0}', vars.FALCON_SENSOR_TAGS) || '' }}
@@ -321,7 +288,7 @@ jobs:
 
       - name: Summarize what Falcon added
         env:
-          APP_IMAGE: ${{ needs.build.outputs.app_image }}
+          APP_IMAGE: ${{ steps.publish.outputs.app-image }}
           PATCHED_IMAGE: ${{ steps.ecr.outputs.registry }}/${{ vars.NAME_PREFIX }}/app-falcon-patched:${{ github.sha }}
         run: |
           aws ecs describe-task-definition --task-definition "${{ steps.register.outputs.arn }}" > registered.json
@@ -336,7 +303,7 @@ jobs:
   sample-02-terraform-module:
     name: "02: Terraform module"
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment:
       name: ${{ github.ref == 'refs/heads/main' && 'aws-main' || 'aws-approval' }}
       deployment: false
@@ -351,8 +318,6 @@ jobs:
       TF_INPUT: "false"
       TF_VAR_aws_region: ${{ vars.AWS_REGION }}
       TF_VAR_name_prefix: ${{ vars.NAME_PREFIX }}
-      TF_VAR_app_image: ${{ needs.build.outputs.app_image }}
-      TF_VAR_falcon_image: ${{ needs.build.outputs.falcon_image }}
       TF_VAR_falcon_cid: ${{ secrets.FALCON_CID }}
       TF_VAR_falcon_sensor_tags: ${{ vars.FALCON_SENSOR_TAGS }}
       TF_VAR_execution_role_arn: ${{ vars.TASK_EXECUTION_ROLE_ARN }}
@@ -366,6 +331,23 @@ jobs:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           role-session-name: github-${{ github.run_id }}-sample-02
           aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Publish images to ECR
+        id: publish
+        uses: ./.github/actions/publish-images
+        with:
+          registry: ${{ steps.ecr.outputs.registry }}
+          name-prefix: ${{ vars.NAME_PREFIX }}
+          mirror-sensor: "true"
+          sensor-version: ${{ needs.build.outputs.falcon_sensor_version }}
+          falcon-cloud: ${{ vars.FALCON_CLOUD }}
+          falcon-client-id: ${{ secrets.FALCON_CLIENT_ID }}
+          falcon-client-secret: ${{ secrets.FALCON_CLIENT_SECRET }}
+          falcon-scripts-version: ${{ env.FALCON_SCRIPTS_VERSION }}
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v4
@@ -381,6 +363,9 @@ jobs:
             -backend-config="region=${AWS_REGION}"
 
       - name: Terraform plan
+        env:
+          TF_VAR_app_image: ${{ steps.publish.outputs.app-image }}
+          TF_VAR_falcon_image: ${{ steps.publish.outputs.falcon-image }}
         run: terraform plan -out=tfplan
 
       - name: Terraform apply
@@ -396,7 +381,7 @@ jobs:
   sample-03-task-definition-patch:
     name: "03: Task definition patch"
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment:
       name: ${{ github.ref == 'refs/heads/main' && 'aws-main' || 'aws-approval' }}
       deployment: false
@@ -404,8 +389,6 @@ jobs:
       contents: read
       id-token: write
     env:
-      APP_IMAGE: ${{ needs.build.outputs.app_image }}
-      FALCON_IMAGE: ${{ needs.build.outputs.falcon_image }}
       TASK_EXECUTION_ROLE_ARN: ${{ vars.TASK_EXECUTION_ROLE_ARN }}
     steps:
       - name: Checkout
@@ -421,6 +404,24 @@ jobs:
       - name: Log in to Amazon ECR
         id: ecr
         uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Publish images to ECR
+        id: publish
+        uses: ./.github/actions/publish-images
+        with:
+          registry: ${{ steps.ecr.outputs.registry }}
+          name-prefix: ${{ vars.NAME_PREFIX }}
+          mirror-sensor: "true"
+          sensor-version: ${{ needs.build.outputs.falcon_sensor_version }}
+          falcon-cloud: ${{ vars.FALCON_CLOUD }}
+          falcon-client-id: ${{ secrets.FALCON_CLIENT_ID }}
+          falcon-client-secret: ${{ secrets.FALCON_CLIENT_SECRET }}
+          falcon-scripts-version: ${{ env.FALCON_SCRIPTS_VERSION }}
+
+      - name: Export image URIs
+        run: |
+          echo "APP_IMAGE=${{ steps.publish.outputs.app-image }}" >> "$GITHUB_ENV"
+          echo "FALCON_IMAGE=${{ steps.publish.outputs.falcon-image }}" >> "$GITHUB_ENV"
 
       # The patching utility reads the application image config (entrypoint/cmd) using this token
       - name: Create registry pull token
@@ -482,7 +483,7 @@ jobs:
   sample-04-cloudformation-patch:
     name: "04: CloudFormation patch"
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment:
       name: ${{ github.ref == 'refs/heads/main' && 'aws-main' || 'aws-approval' }}
       deployment: false
@@ -490,8 +491,6 @@ jobs:
       contents: read
       id-token: write
     env:
-      APP_IMAGE: ${{ needs.build.outputs.app_image }}
-      FALCON_IMAGE: ${{ needs.build.outputs.falcon_image }}
       STACK_NAME: ${{ vars.NAME_PREFIX }}-cloudformation-patch
     steps:
       - name: Checkout
@@ -507,6 +506,24 @@ jobs:
       - name: Log in to Amazon ECR
         id: ecr
         uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Publish images to ECR
+        id: publish
+        uses: ./.github/actions/publish-images
+        with:
+          registry: ${{ steps.ecr.outputs.registry }}
+          name-prefix: ${{ vars.NAME_PREFIX }}
+          mirror-sensor: "true"
+          sensor-version: ${{ needs.build.outputs.falcon_sensor_version }}
+          falcon-cloud: ${{ vars.FALCON_CLOUD }}
+          falcon-client-id: ${{ secrets.FALCON_CLIENT_ID }}
+          falcon-client-secret: ${{ secrets.FALCON_CLIENT_SECRET }}
+          falcon-scripts-version: ${{ env.FALCON_SCRIPTS_VERSION }}
+
+      - name: Export image URIs
+        run: |
+          echo "APP_IMAGE=${{ steps.publish.outputs.app-image }}" >> "$GITHUB_ENV"
+          echo "FALCON_IMAGE=${{ steps.publish.outputs.falcon-image }}" >> "$GITHUB_ENV"
 
       - name: Create registry pull token
         id: token

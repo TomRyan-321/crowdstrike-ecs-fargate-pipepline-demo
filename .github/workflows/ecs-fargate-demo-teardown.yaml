@@ -22,7 +22,7 @@ env:
 jobs:
   teardown:
     name: Remove sample deployments
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # deployment: false keeps the approval gate and OIDC environment claim without creating a
     # GitHub deployment record (parallel jobs waiting on one deployment environment can't be approved)
     environment:

@@ -230,7 +230,8 @@ def task_definition(path, title, description):
     console = (f"https://{region}.console.aws.amazon.com/ecs/v2/task-definitions/"
                f"{family}/{revision}/containers?region={region}")
     platform = td.get("runtimePlatform", {}).get("cpuArchitecture", "X86_64")
-    containers = td.get("containerDefinitions", [])
+    # Falcon init container first: it runs before the application containers
+    containers = sorted(td.get("containerDefinitions", []), key=lambda c: c["name"] != FALCON_INIT)
     apps = [c for c in containers if c["name"] != FALCON_INIT]
     has_init = len(apps) != len(containers)
 

@@ -37,9 +37,12 @@ iac-scan ──► build ──┬──► 01 falconutil patch-image ──► 
 1. **iac-scan** scans this repository's Terraform, CloudFormation and task definitions with the [Falcon Cloud Security IaC scanner](https://github.com/CrowdStrike/fcs-action). It uploads the SARIF results to GitHub code scanning and to the Falcon console.
 2. **build** does the following:
    - Builds `app/` and scans the image with Falcon Cloud Security image assessment. Pass or fail comes from your **Image Assessment policy** in the Falcon console. The results go to the Falcon console, to GitHub code scanning as SARIF, and to a workflow artifact.
-   - Pushes the image to Amazon ECR.
-   - Mirrors the Falcon Container sensor image from the CrowdStrike registry into a private ECR repository with [`falcon-container-sensor-pull.sh`](https://github.com/CrowdStrike/falcon-scripts/tree/main/bash/containers/falcon-container-sensor-pull). The sensor is multi-architecture, and Fargate pulls it at task start.
-3. **Samples 01-04** run in parallel. Each one produces a task definition protected by Falcon.
+   - Picks the Falcon Container sensor version, so all four samples use the same release.
+   - Passes the image to the sample jobs as a workflow artifact. This job has no AWS access, so it never needs approval.
+3. **Samples 01-04** run in parallel, and each job is a complete recipe you can copy:
+   - It signs in to AWS, then pushes the app image to Amazon ECR using [`.github/actions/publish-images`](.github/actions/publish-images/action.yml).
+   - The init container samples (02-04) also mirror the Falcon Container sensor into a private ECR repository using [`falcon-container-sensor-pull.sh`](https://github.com/CrowdStrike/falcon-scripts/tree/main/bash/containers/falcon-container-sensor-pull). The sensor is multi-architecture, and Fargate pulls it at task start.
+   - It then registers a Falcon-protected task definition.
 
 The samples register task definitions only. They do not create clusters or services, so they cost almost nothing to run. To start a protected task, use any of the resulting task definitions with your own cluster and network:
 
@@ -57,7 +60,7 @@ Each run's **Summary** page is written to be presented as-is, from top to bottom
 
 1. **Run overview:** what triggered the run, which AWS environment it used, the Falcon cloud, the sensor version and the grouping tags.
 2. **Scan results:** IaC findings and image vulnerabilities by severity, with the top issues in expandable lists. Both scans also appear under **Security → Code scanning**, where you can filter by the `crowdstrike-fcs-iac` and `crowdstrike-fcs-image` categories.
-3. **Sensor mirror:** which Falcon Container sensor version the init container samples use.
+3. **Sensor version:** which Falcon Container sensor release all four samples use.
 4. **One card per sample,** all built from the task definition that ECS actually registered, so the four methods can be compared directly:
    - The containers and their start order, including the Falcon init container where one is used.
    - How each application container launches, for example `Falcon wrapper → python app.py`.
@@ -87,7 +90,7 @@ AWS access uses **GitHub OIDC**, so no long-lived AWS keys are stored in GitHub.
 
   Tokens for pull requests, other branches, tags and other repositories are rejected.
 - **`aws-main`** has a deployment branch policy that allows only `main`. Pushes to `main` and the weekly scheduled run deploy automatically.
-- **`aws-approval`** has a required reviewer. Any run from another branch (via **Run workflow** / `workflow_dispatch`) pauses until the reviewer approves. Expect two approval prompts per run: one for `build`, then one that releases all four sample jobs together.
+- **`aws-approval`** has a required reviewer. Any run from another branch (via **Run workflow** / `workflow_dispatch`) pauses until the reviewer approves. There is one approval per run: only the four sample jobs use AWS, and they wait on the gate together, so one **Review deployments** click releases them all. The environments are configured with `deployment: false`. Required reviewers still apply, but no GitHub deployment records are created.
 - The workflow has **no `pull_request` trigger**. The repository also requires approval before workflows run for outside contributors.
 - The role's permissions are scoped to the sample's resources:
   - Push/pull on three ECR repositories
