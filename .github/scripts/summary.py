@@ -20,6 +20,7 @@ from urllib.parse import unquote
 
 FALCON_INIT = "crowdstrike-falcon-init-container"
 SEVERITIES = ["critical", "high", "medium", "low", "informational"]
+MATURITY = {"poc": "PoC", None: "—", "": "—"}
 
 ECR_HOST = re.compile(r"^\d{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com(\.cn)?/")
 CID_FLAG = re.compile(r"(--cid=)\S+", re.IGNORECASE)
@@ -118,27 +119,59 @@ def image_scan(report_path, exit_code, image):
         print("\n".join(out))
         return
 
-    vulns = [v.get("Vulnerability", {}) for v in report.get("Vulnerabilities") or []]
-    detections = [d.get("Detection", {}) for d in report.get("Detections") or []]
-    vuln_counts = Counter((v.get("Details", {}).get("severity") or "unknown").lower() for v in vulns)
-    det_counts = Counter((d.get("Severity") or "unknown").lower() for d in detections)
+    policy = report.get("PolicyResponse") or {}
+    policy_name = (policy.get("policy") or {}).get("name", "unknown")
+    if policy.get("deny"):
+        out.append(f"**Image Assessment policy `{policy_name}`:** ❌ deny, this image would be blocked")
+    elif policy:
+        out.append(f"**Image Assessment policy `{policy_name}`:** ✅ allowed")
+    else:
+        out.append(status_line(exit_code, "passed the Image Assessment policy", "failed the Image Assessment policy"))
+    out.append("")
 
-    out.append(status_line(exit_code, "passed the Image Assessment policy",
-                           "failed the Image Assessment policy"))
-    out += [severity_table(vuln_counts, "vulnerabilities"), severity_table(det_counts, "detections")]
+    vulns = [v.get("Vulnerability", {}) for v in report.get("Vulnerabilities") or []]
+
+    def exprt(v):
+        rating = ((v.get("Details") or {}).get("cps_rating") or {}).get("CurrentRating") or {}
+        return (rating.get("Rating") or "unknown").lower()
+
+    def cvss(v):
+        return ((v.get("Details") or {}).get("severity") or "unknown").lower()
+
+    by_exprt, by_cvss = Counter(map(exprt, vulns)), Counter(map(cvss, vulns))
+    exploitable = [v for v in vulns if (v.get("ExploitDetails") or {}).get("exploit_found")]
 
     if vulns:
+        out += [f"**{len(vulns)} vulnerabilities**, {len(exploitable)} with a known exploit. "
+                "ExPRT is CrowdStrike's rating of how likely a vulnerability is to be exploited, so it is "
+                "usually the better way to prioritize than CVSS severity.", "",
+                "| Rating | ExPRT | CVSS |", "|---|---:|---:|"]
+        out += [f"| {s.capitalize()} | {by_exprt.get(s, 0)} | {by_cvss.get(s, 0)} |"
+                for s in ["critical", "high", "medium", "low"]]
         rank = {s: i for i, s in enumerate(SEVERITIES)}
-        top = sorted(vulns, key=lambda v: (rank.get((v.get("Details", {}).get("severity") or "").lower(), 9),
-                                           -(v.get("Details", {}).get("base_score") or 0)))[:10]
-        out += ["<details><summary>Top vulnerabilities</summary>", "",
-                "| CVE | Severity | Package | Fixed in |", "|---|---|---|---|"]
+        top = sorted(vulns, key=lambda v: (rank.get(exprt(v), 9), not (v.get("ExploitDetails") or {}).get("exploit_found"),
+                                           -((v.get("Details") or {}).get("base_score") or 0)))[:10]
+        out += ["", "<details open><summary>Top vulnerabilities by ExPRT rating</summary>", "",
+                "| CVE | ExPRT | CVSS | Exploit | Package | Fix |", "|---|---|---|---|---|---|"]
         for v in top:
-            product = v.get("Product", {})
-            out.append(f"| {v.get('CVEID', '')} | {(v.get('Details', {}).get('severity') or '').capitalize()} "
-                       f"| {product.get('Product', '')} {product.get('MajorVersion', '')} "
-                       f"| {', '.join(v.get('FixedVersions') or []) or '—'} |")
-        out += ["", "</details>"]
+            product = v.get("Product") or {}
+            maturity = (v.get("ExploitDetails") or {}).get("max_exploit_maturity")
+            fix = "; ".join(v.get("Remediation") or []) or ", ".join(v.get("FixedVersions") or []) or "—"
+            out.append(f"| {v.get('CVEID', '')} | {exprt(v).capitalize()} | {cvss(v).capitalize()} "
+                       f"({(v.get('Details') or {}).get('base_score', '')}) | {MATURITY.get(maturity, (maturity or '—').capitalize())} "
+                       f"| {product.get('Product', '')} {product.get('MajorVersion', '')} | {fix} |")
+        out += ["", "</details>", ""]
+    else:
+        out += ["No vulnerabilities reported.", ""]
+
+    detections = [d.get("Detection", {}) for d in report.get("Detections") or []]
+    if detections:
+        out += [f"**{len(detections)} detection(s)** (malware, secrets and misconfigurations)", "",
+                "| Type | Severity | Finding |", "|---|---|---|"]
+        out += [f"| {d.get('Type', '')} | {d.get('Severity', '')} | {d.get('Title', '')} |" for d in detections]
+        out.append("")
+    out.append("All findings are also in **Security → Code scanning** (category `crowdstrike-fcs-image`) "
+               "and in the Falcon console under Image Assessment.")
     print("\n".join(out))
 
 
