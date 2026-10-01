@@ -6,6 +6,7 @@
 *.tfplan
 tfplan
 terraform.tfvars
+*_override.tf
 
 # Pipeline artifacts
 build/
