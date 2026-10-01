@@ -1,0 +1,47 @@
+{
+    "family": "${NAME_PREFIX}-task-definition-patch",
+    "networkMode": "awsvpc",
+    "requiresCompatibilities": ["FARGATE"],
+    "runtimePlatform": {
+        "cpuArchitecture": "X86_64",
+        "operatingSystemFamily": "LINUX"
+    },
+    "cpu": "512",
+    "memory": "1024",
+    "executionRoleArn": "${TASK_EXECUTION_ROLE_ARN}",
+    "containerDefinitions": [
+        {
+            "name": "demo-app",
+            "image": "${APP_IMAGE}",
+            "essential": true,
+            "portMappings": [
+                {
+                    "containerPort": 8080,
+                    "protocol": "tcp"
+                }
+            ],
+            "environment": [
+                {
+                    "name": "DEMO_SAMPLE",
+                    "value": "03-task-definition-patch"
+                }
+            ],
+            "readonlyRootFilesystem": true,
+            "logConfiguration": {
+                "logDriver": "awslogs",
+                "options": {
+                    "awslogs-group": "/ecs/${NAME_PREFIX}-task-definition-patch",
+                    "awslogs-region": "${AWS_REGION}",
+                    "awslogs-create-group": "true",
+                    "awslogs-stream-prefix": "demo-app"
+                }
+            }
+        }
+    ],
+    "tags": [
+        {
+            "key": "sample",
+            "value": "03-task-definition-patch"
+        }
+    ]
+}

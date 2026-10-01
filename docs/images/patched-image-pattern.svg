@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 560" width="1200" height="560" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">
+  <title>Falcon Container sensor on ECS Fargate: patched image pattern</title>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#3D474F"/>
+    </marker>
+    <style>
+      .mono { font-family: 'SF Mono', Consolas, 'Liberation Mono', monospace; }
+      .h { font-weight: 700; }
+      .muted { fill: #3D474F; }
+      .line { fill: none; stroke: #3D474F; stroke-width: 2; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect width="1200" height="560" rx="16" fill="#FFFFFF"/>
+
+  <text x="40" y="52" font-size="26" class="h" fill="#000">Patched image pattern</text>
+  <text x="40" y="80" font-size="15" class="muted">Sample 01 · falconutil embeds the sensor into a new image at build time; the task definition only adds SYS_PTRACE</text>
+  <rect x="40" y="94" width="64" height="4" fill="#EC0000"/>
+
+  <!-- Build time -->
+  <rect x="40" y="120" width="520" height="400" rx="14" fill="none" stroke="#A7A9AC" stroke-width="2" stroke-dasharray="7 5"/>
+  <text x="62" y="152" font-size="16" class="h" fill="#000">Build time · GitHub Actions</text>
+
+  <rect x="70" y="180" width="200" height="70" rx="8" fill="#FFFFFF" stroke="#000" stroke-width="1.5"/>
+  <text x="86" y="208" font-size="14" class="h" fill="#000">Application image</text>
+  <text x="86" y="232" font-size="12" class="mono muted">app:&lt;sha&gt;</text>
+
+  <rect x="70" y="280" width="200" height="70" rx="8" fill="#FFFFFF" stroke="#EC0000" stroke-width="1.5"/>
+  <text x="86" y="308" font-size="14" class="h" fill="#000">Falcon Container sensor</text>
+  <text x="86" y="332" font-size="12" class="mono muted">falcon-container</text>
+
+  <rect x="305" y="215" width="230" height="100" rx="10" fill="#EC0000"/>
+  <text x="321" y="247" font-size="16" class="h" fill="#FFFFFF">falconutil patch-image</text>
+  <text x="321" y="272" font-size="12" class="mono" fill="#FFFFFF">--cloud-service ECS_FARGATE</text>
+  <text x="321" y="293" font-size="12" class="mono" fill="#FFFFFF">--falconctl-opts --tags=…</text>
+
+  <path class="line" d="M270 215 L288 215 L288 248 L300 248"/>
+  <path class="line" d="M270 315 L288 315 L288 282 L300 282"/>
+
+  <rect x="70" y="400" width="465" height="92" rx="10" fill="#000"/>
+  <text x="90" y="432" font-size="16" class="h" fill="#FFFFFF">Patched image</text>
+  <text x="90" y="456" font-size="12" class="mono" fill="#F8F8F8">app-falcon-patched:&lt;sha&gt;</text>
+  <text x="90" y="477" font-size="12" fill="#A7A9AC">falcon-entrypoint · sensor · CID and tags · your app</text>
+  <path class="line" d="M420 315 L420 395"/>
+
+  <!-- Run time -->
+  <rect x="600" y="120" width="360" height="400" rx="14" fill="none" stroke="#A7A9AC" stroke-width="2" stroke-dasharray="7 5"/>
+  <text x="622" y="152" font-size="16" class="h" fill="#000">Run time · ECS Fargate task</text>
+
+  <path class="line" d="M535 446 L620 446"/>
+  <text x="578" y="438" font-size="12" class="muted" text-anchor="middle">ECR</text>
+
+  <rect x="625" y="175" width="310" height="320" rx="10" fill="#FFFFFF" stroke="#000" stroke-width="2"/>
+  <text x="645" y="203" font-size="16" class="h" fill="#000">Application container</text>
+  <text x="645" y="224" font-size="12" class="mono muted">linuxParameters: SYS_PTRACE</text>
+
+  <text x="645" y="254" font-size="12" class="mono" fill="#000">ENTRYPOINT falcon-entrypoint</text>
+  <rect x="645" y="266" width="270" height="58" rx="8" fill="#EC0000"/>
+  <text x="661" y="291" font-size="15" class="h" fill="#FFFFFF">Falcon Container sensor</text>
+  <text x="661" y="311" font-size="12" fill="#FFFFFF">user space, inside the container</text>
+  <path class="line" d="M780 324 L780 342"/>
+
+  <rect x="705" y="346" width="150" height="46" rx="8" fill="#000"/>
+  <text x="780" y="375" font-size="15" class="h" fill="#FFFFFF" text-anchor="middle">Your app</text>
+
+  <path class="line" d="M780 392 L780 406 L715 406 L715 420"/>
+  <path class="line" d="M780 406 L845 406 L845 420"/>
+  <rect x="655" y="424" width="120" height="38" rx="8" fill="#F8F8F8" stroke="#A7A9AC"/>
+  <text x="715" y="448" font-size="12" fill="#000" text-anchor="middle">child process</text>
+  <rect x="785" y="424" width="120" height="38" rx="8" fill="#F8F8F8" stroke="#A7A9AC"/>
+  <text x="845" y="448" font-size="12" fill="#000" text-anchor="middle">child process</text>
+  <text x="645" y="484" font-size="12" class="muted">every process in the container is protected</text>
+
+  <!-- CrowdStrike cloud -->
+  <rect x="992" y="240" width="178" height="112" rx="14" fill="#000"/>
+  <text x="1081" y="282" font-size="16" class="h" fill="#FFFFFF" text-anchor="middle">CrowdStrike</text>
+  <text x="1081" y="304" font-size="16" class="h" fill="#FFFFFF" text-anchor="middle">Falcon cloud</text>
+  <text x="1081" y="330" font-size="12" fill="#A7A9AC" text-anchor="middle">telemetry · detections</text>
+  <path class="line" d="M915 295 L986 295"/>
+</svg>

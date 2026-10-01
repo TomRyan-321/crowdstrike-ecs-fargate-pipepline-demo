@@ -1,0 +1,308 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  One-time foundation for the CrowdStrike Falcon ECS Fargate pipeline samples.
+  Creates the GitHub Actions OIDC trust, a least-privilege deploy role scoped to a single
+  repository and its GitHub environments, ECR repositories, a shared ECS task execution role
+  and an S3 bucket for Terraform state.
+
+Parameters:
+  GitHubOwner:
+    Type: String
+    Description: GitHub user or organization that owns the repository
+  GitHubRepository:
+    Type: String
+    Description: GitHub repository name (without the owner)
+  MainEnvironmentName:
+    Type: String
+    Default: aws-main
+    Description: >-
+      GitHub environment used by runs on the main branch. Restrict it to the main branch with a
+      deployment branch policy.
+  ApprovalEnvironmentName:
+    Type: String
+    Default: aws-approval
+    Description: >-
+      GitHub environment used by runs on any other branch. Protect it with required reviewers.
+  NamePrefix:
+    Type: String
+    Default: ecs-fargate-demo
+    AllowedPattern: "^[a-z0-9-]+$"
+    Description: Prefix applied to every resource name
+  CreateOIDCProvider:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      Set to false if the account already has the token.actions.githubusercontent.com OIDC
+      provider (only one can exist per account).
+
+Conditions:
+  ShouldCreateOIDCProvider: !Equals [!Ref CreateOIDCProvider, "true"]
+
+Resources:
+  GitHubOIDCProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: ShouldCreateOIDCProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+
+  # Only jobs that run inside one of the two GitHub environments of this one repository can
+  # assume the role. GitHub enforces the environment protections before issuing the token:
+  #   aws-main     -> deployment branch policy limited to main (runs automatically)
+  #   aws-approval -> required reviewers (any other branch waits for approval)
+  # Pull request, branch and tag subjects (repo:<owner>/<repo>:pull_request, ...:ref:...) are
+  # not trusted.
+  GitHubDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${NamePrefix}-github-deploy"
+      Description: !Sub "Assumed by GitHub Actions in ${GitHubOwner}/${GitHubRepository}"
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - ShouldCreateOIDCProvider
+                - !Ref GitHubOIDCProvider
+                - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com"
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub:
+                  - !Sub "repo:${GitHubOwner}/${GitHubRepository}:environment:${MainEnvironmentName}"
+                  - !Sub "repo:${GitHubOwner}/${GitHubRepository}:environment:${ApprovalEnvironmentName}"
+      Policies:
+        - PolicyName: ecs-fargate-samples
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: EcrLogin
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Sid: EcrPushPull
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:CompleteLayerUpload
+                  - ecr:DescribeImages
+                  - ecr:DescribeRepositories
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:InitiateLayerUpload
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                Resource:
+                  - !GetAtt AppRepository.Arn
+                  - !GetAtt AppPatchedRepository.Arn
+                  - !GetAtt FalconContainerRepository.Arn
+              # ecs:RegisterTaskDefinition does not support resource-level permissions
+              - Sid: EcsTaskDefinitions
+                Effect: Allow
+                Action:
+                  - ecs:DeregisterTaskDefinition
+                  - ecs:DescribeTaskDefinition
+                  - ecs:ListTaskDefinitions
+                  - ecs:RegisterTaskDefinition
+                Resource: "*"
+              - Sid: EcsTagging
+                Effect: Allow
+                Action:
+                  - ecs:ListTagsForResource
+                  - ecs:TagResource
+                  - ecs:UntagResource
+                Resource: !Sub "arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/${NamePrefix}-*"
+              - Sid: PassTaskExecutionRole
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt TaskExecutionRole.Arn
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: ecs-tasks.amazonaws.com
+              - Sid: LogGroupsDescribe
+                Effect: Allow
+                Action: logs:DescribeLogGroups
+                Resource: "*"
+              - Sid: LogGroupsManage
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:DeleteLogGroup
+                  - logs:DeleteRetentionPolicy
+                  - logs:ListTagsForResource
+                  - logs:ListTagsLogGroup
+                  - logs:PutRetentionPolicy
+                  - logs:TagLogGroup
+                  - logs:TagResource
+                  - logs:UntagLogGroup
+                  - logs:UntagResource
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/ecs/${NamePrefix}-*"
+              - Sid: TerraformStateBucket
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt TerraformStateBucket.Arn
+              - Sid: TerraformStateObjects
+                Effect: Allow
+                Action:
+                  - s3:DeleteObject
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !Sub "${TerraformStateBucket.Arn}/*"
+              - Sid: CloudFormationSampleStack
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:CreateStack
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:DeleteStack
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStacks
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:GetTemplate
+                  - cloudformation:UpdateStack
+                Resource: !Sub "arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${NamePrefix}-cloudformation-patch/*"
+              - Sid: CloudFormationTemplates
+                Effect: Allow
+                Action:
+                  - cloudformation:GetTemplateSummary
+                  - cloudformation:ValidateTemplate
+                Resource: "*"
+
+  # Shared by every sample task definition. CreateLogGroup lets the JSON task definition samples
+  # use awslogs-create-group.
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${NamePrefix}-task-execution"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+      Policies:
+        - PolicyName: create-log-groups
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: logs:CreateLogGroup
+                Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/ecs/${NamePrefix}-*"
+
+  # Application image as built from app/Dockerfile (used by the init container samples)
+  AppRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${NamePrefix}/app"
+      ImageTagMutability: MUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {"rules":[{"rulePriority":1,"description":"Keep the 10 most recent images","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":10},"action":{"type":"expire"}}]}
+
+  # Application image with the Falcon Container sensor embedded by falconutil patch-image
+  AppPatchedRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${NamePrefix}/app-falcon-patched"
+      ImageTagMutability: MUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {"rules":[{"rulePriority":1,"description":"Keep the 10 most recent images","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":10},"action":{"type":"expire"}}]}
+
+  # Private mirror of the Falcon Container sensor image, pulled by the init container at task start
+  FalconContainerRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${NamePrefix}/falcon-container"
+      ImageTagMutability: MUTABLE
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {"rules":[{"rulePriority":1,"description":"Keep the 5 most recent sensor versions","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":5},"action":{"type":"expire"}}]}
+
+  TerraformStateBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "${NamePrefix}-tfstate-${AWS::AccountId}-${AWS::Region}"
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-state-versions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 90
+
+  TerraformStateBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref TerraformStateBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt TerraformStateBucket.Arn
+              - !Sub "${TerraformStateBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+Outputs:
+  GitHubDeployRoleArn:
+    Description: Value for the AWS_ROLE_ARN repository variable
+    Value: !GetAtt GitHubDeployRole.Arn
+  TaskExecutionRoleArn:
+    Description: Value for the TASK_EXECUTION_ROLE_ARN repository variable
+    Value: !GetAtt TaskExecutionRole.Arn
+  TerraformStateBucketName:
+    Description: Value for the TF_STATE_BUCKET repository variable
+    Value: !Ref TerraformStateBucket
+  EcrRegistry:
+    Description: ECR registry hostname
+    Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.${AWS::URLSuffix}"
+  AppRepositoryUri:
+    Value: !GetAtt AppRepository.RepositoryUri
+  AppPatchedRepositoryUri:
+    Value: !GetAtt AppPatchedRepository.RepositoryUri
+  FalconContainerRepositoryUri:
+    Value: !GetAtt FalconContainerRepository.RepositoryUri

@@ -1,0 +1,84 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Sample ECS Fargate task definition for a single container application. The pipeline runs this
+  template through the Falcon Container sensor patching utility, which adds the Falcon init
+  container, shared volume, entrypoint wrapper and SYS_PTRACE capability before deployment.
+
+Parameters:
+  NamePrefix:
+    Type: String
+    Default: ecs-fargate-demo
+    Description: Prefix for the task definition family and log group
+  AppName:
+    Type: String
+    Default: demo-app
+    Description: Logical name for the application container
+  AppImagePath:
+    Type: String
+    Description: Full application image URI including tag or digest
+  AppContainerPort:
+    Type: Number
+    Default: 8080
+    Description: Container port to expose
+  ExecutionRoleArn:
+    Type: String
+    Description: ARN of the ECS task execution role (allows pulling from ECR and writing logs)
+  TaskCPU:
+    Type: String
+    Default: "512"
+    AllowedValues: ["256", "512", "1024", "2048", "4096", "8192", "16384"]
+    Description: Task CPU units
+  TaskMemory:
+    Type: String
+    Default: "1024"
+    Description: Task memory in MiB (must be valid for the selected CPU)
+  LogRetentionDays:
+    Type: Number
+    Default: 30
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 180, 365]
+    Description: CloudWatch Logs retention
+
+Resources:
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/ecs/${NamePrefix}-cloudformation-patch"
+      RetentionInDays: !Ref LogRetentionDays
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "${NamePrefix}-cloudformation-patch"
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      RuntimePlatform:
+        CpuArchitecture: X86_64
+        OperatingSystemFamily: LINUX
+      Cpu: !Ref TaskCPU
+      Memory: !Ref TaskMemory
+      ExecutionRoleArn: !Ref ExecutionRoleArn
+      ContainerDefinitions:
+        - Name: !Ref AppName
+          Image: !Ref AppImagePath
+          Essential: true
+          PortMappings:
+            - ContainerPort: !Ref AppContainerPort
+              Protocol: tcp
+          Environment:
+            - Name: DEMO_SAMPLE
+              Value: 04-cloudformation-patch
+          ReadonlyRootFilesystem: true
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: !Ref AppName
+      Tags:
+        - Key: sample
+          Value: 04-cloudformation-patch
+
+Outputs:
+  TaskDefinitionArn:
+    Value: !Ref TaskDefinition
