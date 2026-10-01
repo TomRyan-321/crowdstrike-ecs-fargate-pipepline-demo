@@ -1,10 +1,12 @@
 # CrowdStrike Falcon on Amazon ECS Fargate: pipeline samples
 
-This repository shows how to protect Amazon ECS Fargate workloads with the **CrowdStrike Falcon Container sensor** from a GitHub Actions pipeline. Every method starts from the same small Python app and ends with a registered ECS task definition that runs the app with Falcon runtime protection.
+This repository is a hands-on guide to protecting Amazon ECS Fargate workloads with the **CrowdStrike Falcon Container sensor**. It covers every supported patching method, each of which you can run **locally** with the AWS CLI and Docker or from a **GitHub Actions** pipeline. Every method starts from the same small Python app and ends with a registered ECS task definition that runs the app with Falcon runtime protection.
+
+**Start with the [patching guide](samples/README.md).** It explains how to choose a method, a one-time local setup, how to run and verify a protected task, and how to troubleshoot. Each sample folder then has step-by-step local instructions.
 
 Pick the sample that matches how you already deploy to ECS:
 
-| # | Sample | How Falcon is added | Best fit when you... |
+| # | Sample (local guide) | How Falcon is added | Best fit when you... |
 |---|--------|---------------------|----------------------|
 | 01 | [falconutil patch-image](samples/01-falconutil-patched-image) | The sensor is embedded into a new copy of your image at build time with [`crowdstrike/falconutil-action`](https://github.com/CrowdStrike/falconutil-action) | Ship images through a pipeline, deploy with any tool, and want minimal changes to task definitions |
 | 02 | [Terraform module](samples/02-terraform-module) | [`CrowdStrike/terraform-aws-ecs-fargate`](https://github.com/CrowdStrike/terraform-aws-ecs-fargate) builds the task definition with the Falcon init container | Manage ECS with Terraform |
@@ -202,9 +204,9 @@ gh variable set FALCON_SENSOR_TAGS --body "cs-myteam-ecs-demo,production"
 AGENTS.md                    Setup and change guide for AI coding agents
 app/                         Sample Flask application and Dockerfile
 bootstrap/                   One-time AWS (CloudFormation) and GitHub setup
-demo/detection-container/    Task definition for the Falcon-protected detection container
+demo/detection-container/    Task definition and local guide for the Falcon-protected detection container
 docs/images/                 Architecture diagrams
-samples/
+samples/                     Patching guide: method comparison, local setup, verification, troubleshooting
   01-falconutil-patched-image/   Task definition for the falconutil-patched image
   02-terraform-module/           Terraform using CrowdStrike/terraform-aws-ecs-fargate
   03-task-definition-patch/      Task definition JSON patched by the Falcon utility

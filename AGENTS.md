@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for AI coding agents (Claude Code, Codex, Copilot, Cursor and others) that are asked to **stand up this repository in a user's own AWS account and GitHub repository**, or to change it. Read [README.md](README.md) for the full design. This file is the operating procedure.
+Guidance for AI coding agents (Claude Code, Codex, Copilot, Cursor and others) that are asked to **stand up this repository in a user's own AWS account and GitHub repository**, or to change it. Read [README.md](README.md) for the full design. This file is the operating procedure. If the human wants to patch tasks **without the pipeline**, follow [samples/README.md](samples/README.md) and the per-sample local guides instead.
 
 ## What this repository deploys
 
