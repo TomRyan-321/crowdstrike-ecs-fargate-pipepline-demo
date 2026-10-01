@@ -72,7 +72,7 @@ Your CID is redacted and the AWS account ID is hidden, so the page is safe to sh
 
 ### Demo findings and scan enforcement
 
-The demo app is **intentionally a little out of date** so the image assessment has something to show. It uses the `python:3.12.7-alpine3.20` base image and older Flask, Werkzeug, Jinja2, waitress and click releases, with a handful of known CVEs; see [`app/requirements.txt`](app/requirements.txt). GitHub Dependabot will flag the same packages. Bump them to current releases before you reuse the app for anything else.
+The demo app is **intentionally a little out of date** so the image assessment has something to show. It uses the `python:3.12.7-alpine3.20` base image and older Flask, Werkzeug, Jinja2, waitress and click releases, with a handful of known CVEs; see [`app/requirements.txt`](app/requirements.txt). All scanning in this repository uses CrowdStrike Falcon Cloud Security; GitHub Dependabot, secret scanning and CodeQL are not enabled. Bump them to current releases before you reuse the app for anything else.
 
 By default, failed scans **warn and the pipeline keeps going**. This means a vulnerable image still reaches the four samples, and the findings stay visible in the summary. To block on failed scans instead (the IaC `fail_on` thresholds or the Image Assessment policy), set:
 
