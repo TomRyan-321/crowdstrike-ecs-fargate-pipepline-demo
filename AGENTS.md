@@ -12,7 +12,7 @@ Guidance for AI coding agents (Claude Code, Codex, Copilot, Cursor and others) t
 
   Nothing in the bootstrap costs money while idle (there are no NAT gateways or load balancers).
 - **The pipeline** ([`.github/workflows/cs-ecs-fargate-demo.yaml`](.github/workflows/cs-ecs-fargate-demo.yaml)) scans with CrowdStrike Falcon Cloud Security and registers four Falcon-protected ECS Fargate task definitions. It does not run services.
-- **The optional detection container stage** runs one Fargate task (0.5 vCPU / 1 GiB, with a public IP) for one hour. That costs a few cents per run.
+- **The optional detection container stage** runs one **Fargate Spot** task (0.5 vCPU / 1 GiB, with a public IP) for one hour. That costs a few cents per run. Keep demo tasks on `FARGATE_SPOT`.
 
 ## Ask the human first
 
