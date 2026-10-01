@@ -1,4 +1,6 @@
-FROM python:3.13-alpine
+# Intentionally outdated base image and dependencies so the Falcon Cloud Security image
+# assessment has real vulnerabilities to report. Do not use these versions in production.
+FROM python:3.12.7-alpine3.20
 WORKDIR /app
 COPY requirements.txt .
 RUN pip3 install --no-cache-dir -r requirements.txt

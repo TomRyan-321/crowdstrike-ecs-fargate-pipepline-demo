@@ -41,6 +41,9 @@ env:
   FALCON_SENSOR_TAGS: ${{ vars.FALCON_SENSOR_TAGS }}
   FALCON_SCRIPTS_VERSION: v1.14.0
   SUMMARY: python3 .github/scripts/summary.py
+  # Scan failures only warn unless the ENFORCE_SCAN_RESULTS repository variable is "true", so the
+  # demo continues past findings. Set it to "true" to block the pipeline on failed scans.
+  ENFORCE_SCAN_RESULTS: ${{ vars.ENFORCE_SCAN_RESULTS || 'false' }}
   SOURCE_URL: ${{ github.server_url }}/${{ github.repository }}/blob/${{ github.sha }}
 
 jobs:
@@ -73,6 +76,7 @@ jobs:
           | Falcon cloud | \`${FALCON_CLOUD}\` |
           | Sensor version | \`${SENSOR_VERSION}\` |
           | Sensor grouping tags | \`${FALCON_SENSOR_TAGS:-none}\` |
+          | Scan results enforced | \`${ENFORCE_SCAN_RESULTS}\` |
 
           EOF
 
@@ -106,8 +110,13 @@ jobs:
       - name: Enforce IaC scan result
         if: steps.fcs.outputs.exit-code != '0'
         run: |
-          echo "::error::FCS IaC scan exceeded the fail_on thresholds (exit code ${{ steps.fcs.outputs.exit-code }})"
-          exit 1
+          message="FCS IaC scan exceeded the fail_on thresholds (exit code ${{ steps.fcs.outputs.exit-code }})"
+          if [[ "$ENFORCE_SCAN_RESULTS" == "true" ]]; then
+            echo "::error::$message"
+            exit 1
+          fi
+          echo "::warning::$message. Continuing because ENFORCE_SCAN_RESULTS is not true."
+          echo "> ⚠️ Not enforced for this run: the pipeline continues." >> "$GITHUB_STEP_SUMMARY"
 
   build:
     name: Build, scan and push image
@@ -117,6 +126,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      security-events: write
     outputs:
       app_image: ${{ steps.push.outputs.app_image }}
       falcon_image: ${{ steps.sensor.outputs.falcon_image }}
@@ -150,8 +160,9 @@ jobs:
           scan_type: image
           image: ${{ steps.ecr.outputs.registry }}/${{ vars.NAME_PREFIX }}/app:${{ github.sha }}
           platform: linux/amd64
-          report_formats: json
-          output_path: ./fcs-image-scan.json
+          # The action scans to fcs-image-scan.json and converts it to this SARIF file
+          report_formats: sarif
+          output_path: ./fcs-image-scan.sarif
           upload_results: true
         env:
           FALCON_CLIENT_SECRET: ${{ secrets.FALCON_CLIENT_SECRET }}
@@ -162,19 +173,31 @@ jobs:
           APP_IMAGE: ${{ steps.ecr.outputs.registry }}/${{ vars.NAME_PREFIX }}/app:${{ github.sha }}
         run: $SUMMARY image-scan fcs-image-scan.json "${{ steps.image-scan.outputs.exit-code }}" "$APP_IMAGE" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload image scan report
-        if: always() && hashFiles('fcs-image-scan.json') != ''
+      - name: Upload image scan SARIF to GitHub code scanning
+        if: always() && hashFiles('fcs-image-scan.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: fcs-image-scan.sarif
+          category: crowdstrike-fcs-image
+
+      - name: Upload image scan reports
+        if: always() && hashFiles('fcs-image-scan.*') != ''
         uses: actions/upload-artifact@v7
         with:
           name: fcs-image-scan
-          path: fcs-image-scan.json
+          path: fcs-image-scan.*
 
       # The pass/fail decision comes from the Image Assessment policy in the Falcon console
       - name: Enforce image assessment policy
         if: steps.image-scan.outputs.exit-code != '0'
         run: |
-          echo "::error::Image failed the Falcon image assessment policy (exit code ${{ steps.image-scan.outputs.exit-code }})"
-          exit 1
+          message="Image failed the Falcon Image Assessment policy (exit code ${{ steps.image-scan.outputs.exit-code }})"
+          if [[ "$ENFORCE_SCAN_RESULTS" == "true" ]]; then
+            echo "::error::$message"
+            exit 1
+          fi
+          echo "::warning::$message. Continuing because ENFORCE_SCAN_RESULTS is not true."
+          echo "> ⚠️ Not enforced for this run: the image is still pushed so the samples can deploy it." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Push image
         id: push

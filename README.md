@@ -36,7 +36,7 @@ iac-scan ──► build ──┬──► 01 falconutil patch-image ──► 
 
 1. **iac-scan** scans this repository's Terraform, CloudFormation and task definitions with the [Falcon Cloud Security IaC scanner](https://github.com/CrowdStrike/fcs-action). It uploads the SARIF results to GitHub code scanning and to the Falcon console.
 2. **build** does the following:
-   - Builds `app/` and scans the image with Falcon Cloud Security image assessment. Pass or fail comes from your **Image Assessment policy** in the Falcon console.
+   - Builds `app/` and scans the image with Falcon Cloud Security image assessment. Pass or fail comes from your **Image Assessment policy** in the Falcon console. The results go to the Falcon console, to GitHub code scanning as SARIF, and to a workflow artifact.
    - Pushes the image to Amazon ECR.
    - Mirrors the Falcon Container sensor image from the CrowdStrike registry into a private ECR repository with [`falcon-container-sensor-pull.sh`](https://github.com/CrowdStrike/falcon-scripts/tree/main/bash/containers/falcon-container-sensor-pull). The sensor is multi-architecture, and Fargate pulls it at task start.
 3. **Samples 01-04** run in parallel. Each one produces a task definition protected by Falcon.
@@ -56,7 +56,7 @@ The task needs outbound access (a public IP or NAT) to reach ECR and the Falcon 
 Each run's **Summary** page is written to be presented as-is, from top to bottom:
 
 1. **Run overview:** what triggered the run, which AWS environment it used, the Falcon cloud, the sensor version and the grouping tags.
-2. **Scan results:** IaC findings and image vulnerabilities by severity, with the top issues in expandable lists. IaC findings also appear under **Security → Code scanning**.
+2. **Scan results:** IaC findings and image vulnerabilities by severity, with the top issues in expandable lists. Both scans also appear under **Security → Code scanning**, where you can filter by the `crowdstrike-fcs-iac` and `crowdstrike-fcs-image` categories.
 3. **Sensor mirror:** which Falcon Container sensor version the init container samples use.
 4. **One card per sample,** all built from the task definition that ECS actually registered, so the four methods can be compared directly:
    - The containers and their start order, including the Falcon init container where one is used.
@@ -66,6 +66,16 @@ Each run's **Summary** page is written to be presented as-is, from top to bottom
    - For sample 01, a before and after view of the image's entrypoint and environment.
 
 Your CID is redacted and the AWS account ID is hidden, so the page is safe to share on screen. In the job logs, noisy output such as the full patch diffs and the sensor download is folded into collapsed groups. The run graph (`iac-scan → build → 01 | 02 | 03 | 04`) shows the four methods running side by side.
+
+### Demo findings and scan enforcement
+
+The demo app is **intentionally a little out of date** so the image assessment has something to show. It uses the `python:3.12.7-alpine3.20` base image and older Flask, Werkzeug, Jinja2, waitress and click releases, with a handful of known CVEs; see [`app/requirements.txt`](app/requirements.txt). GitHub Dependabot will flag the same packages. Bump them to current releases before you reuse the app for anything else.
+
+By default, failed scans **warn and the pipeline keeps going**. This means a vulnerable image still reaches the four samples, and the findings stay visible in the summary. To block on failed scans instead (the IaC `fail_on` thresholds or the Image Assessment policy), set:
+
+```bash
+gh variable set ENFORCE_SCAN_RESULTS --body true
+```
 
 ## Security model
 
