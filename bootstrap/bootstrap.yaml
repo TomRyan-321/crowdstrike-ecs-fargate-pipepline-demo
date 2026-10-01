@@ -308,6 +308,13 @@ Resources:
       ClusterSettings:
         - Name: containerInsights
           Value: disabled
+      # Short-lived demo tasks run on Fargate Spot (up to 70% cheaper); interruptions are acceptable
+      CapacityProviders:
+        - FARGATE_SPOT
+        - FARGATE
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: FARGATE_SPOT
+          Weight: 1
 
   DemoVpc:
     Type: AWS::EC2::VPC

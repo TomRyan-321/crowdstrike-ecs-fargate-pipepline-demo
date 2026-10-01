@@ -50,12 +50,13 @@ iac-scan ──► build ──┬──► 01 falconutil patch-image ──► 
 The samples register task definitions only; they don't create services. To start a protected task, use any of the resulting task definitions with your own cluster and network:
 
 ```bash
-aws ecs run-task --cluster <cluster> --launch-type FARGATE \
+aws ecs run-task --cluster <cluster> \
+  --capacity-provider-strategy capacityProvider=FARGATE_SPOT,weight=1 \
   --task-definition ecs-fargate-demo-terraform-module \
   --network-configuration 'awsvpcConfiguration={subnets=[subnet-xxxx],securityGroups=[sg-xxxx],assignPublicIp=ENABLED}'
 ```
 
-The task needs outbound access (a public IP or NAT) to reach ECR and the Falcon cloud. Once it's running, the sensor registers with your Falcon tenant and appears in host management.
+Fargate Spot is a good fit for short-lived test tasks like this; use `FARGATE` for workloads that can't tolerate interruption. The task needs outbound access (a public IP or NAT) to reach ECR and the Falcon cloud. Once it's running, the sensor registers with your Falcon tenant and appears in host management.
 
 ### Running a single sample
 
@@ -93,6 +94,7 @@ Tick **detection_container** when you start **Run workflow** to add this stage. 
 - **Image:** `quay.io/crowdstrike/detection-container` is patched with `falconutil patch-image` and stored in the `ecs-fargate-demo/detection-container` ECR repository. The image is tagged with the sensor version and the sensor tags, so later runs reuse it and start in seconds.
 - **Activity:** the task first runs every bundled detection scenario, about 15 seconds apart. Examples include credential dumping, a reverse shell, ransomware-style file encryption and container drift. After that, it keeps triggering a random scenario every few minutes.
 - **Networking:** the task runs in a small VPC that the bootstrap creates. It has public subnets and a security group with **no inbound rules**. The task gets a public IP purely so it can reach ECR and the CrowdStrike cloud without a NAT gateway.
+- **Fargate Spot:** the task runs on Fargate Spot, which costs up to 70% less than on-demand. If AWS reclaims the capacity mid-run, the task simply stops early.
 - **Automatic stop:** a one-time EventBridge Scheduler schedule stops the task after **one hour**, then deletes itself. The stop happens even if the GitHub run is cancelled. The task costs a few cents for the hour.
 
 The run summary links to the running task and shows when it will stop. In the Falcon console, the detections carry your sensor grouping tag. You can find the host under **Host setup and management → Manage endpoints → Host management** by filtering on **Pod ID** (the ECS task ID).
@@ -154,7 +156,7 @@ FALCON_SENSOR_TAGS=cs-myteam-ecs-demo bootstrap/setup.sh <owner>/<repo>
    - The deploy role and a shared task execution role
    - ECR repositories for `app`, `app-falcon-patched`, `falcon-container` and `detection-container`
    - A versioned, encrypted S3 bucket for Terraform state, using native S3 locking
-   - For the detection container: an ECS cluster, a VPC with two public subnets and an outbound-only security group, an EventBridge Scheduler group, and the role it uses to stop tasks. None of these cost anything while idle.
+   - For the detection container: an ECS cluster that defaults to Fargate Spot, a VPC with two public subnets and an outbound-only security group, an EventBridge Scheduler group, and the role it uses to stop tasks. None of these cost anything while idle.
 2. Creates the `aws-main` and `aws-approval` GitHub environments with the protections described above.
 3. Stores the stack outputs as repository variables: `AWS_REGION`, `AWS_ROLE_ARN`, `TASK_EXECUTION_ROLE_ARN`, `TF_STATE_BUCKET`, `NAME_PREFIX`, `FALCON_CLOUD`, `ECS_CLUSTER`, `DEMO_SUBNETS`, `DEMO_SECURITY_GROUP`, `SCHEDULER_ROLE_ARN` and (when set) `FALCON_SENSOR_TAGS`.
 
