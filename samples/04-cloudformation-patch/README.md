@@ -67,5 +67,6 @@ The pipeline's `sample-04-cloudformation-patch` job patches the template on ever
 
 - **Several task definitions in one template:** all of them are patched in one pass. Every image the utility needs to inspect must be resolvable, either as a literal image URI or as a parameter whose value you pass with `-cloudformationParams`.
 - **CDK and SAM:** run the utility on the synthesized template (`cdk synth` output or the packaged SAM template), then deploy that file.
+- **Log retention:** the template's log group keeps logs for `LogRetentionDays`, which defaults to 7.
 - **Images set as literals** (rather than through parameters) don't need `-cloudformationParams`.
 - **Exclude a container:** add the `sensor.falcon-system.crowdstrike.com/injection: disabled` Docker label to it before patching.

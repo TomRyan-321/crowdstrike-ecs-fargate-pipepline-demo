@@ -62,6 +62,8 @@ env:
   # Scan failures only warn unless the ENFORCE_SCAN_RESULTS repository variable is "true", so the
   # demo continues past findings. Set it to "true" to block the pipeline on failed scans.
   ENFORCE_SCAN_RESULTS: ${{ vars.ENFORCE_SCAN_RESULTS || 'false' }}
+  # CloudWatch Logs retention for every log group the samples write to, so demo logs expire
+  LOG_RETENTION_DAYS: "7"
   SOURCE_URL: ${{ github.server_url }}/${{ github.repository }}/blob/${{ github.sha }}
   # Manual runs can pick one sample; push and scheduled runs run all of them
   SAMPLE: ${{ inputs.sample || 'all' }}
@@ -296,6 +298,13 @@ jobs:
       - name: Push patched image
         run: docker push --quiet "${{ steps.ecr.outputs.registry }}/${{ vars.NAME_PREFIX }}/app-falcon-patched:${{ github.sha }}"
 
+      # awslogs-create-group can't set retention, so create the group with a retention policy first
+      - name: Set log retention
+        run: |
+          group="/ecs/${NAME_PREFIX}-patched-image"
+          aws logs create-log-group --log-group-name "$group" 2>/dev/null || true
+          aws logs put-retention-policy --log-group-name "$group" --retention-in-days "$LOG_RETENTION_DAYS"
+
       - name: Register task definition
         id: register
         env:
@@ -391,6 +400,7 @@ jobs:
         env:
           TF_VAR_app_image: ${{ steps.publish.outputs.app-image }}
           TF_VAR_falcon_image: ${{ steps.publish.outputs.falcon-image }}
+          TF_VAR_log_retention_days: ${{ env.LOG_RETENTION_DAYS }}
         run: terraform plan -out=tfplan
 
       - name: Terraform apply
@@ -490,6 +500,13 @@ jobs:
           if [[ -n "$FALCON_SENSOR_TAGS" ]] && ! grep -q "$FALCON_SENSOR_TAGS" build/taskdefinition.patched.json; then
             echo "::warning::Sensor tags were not found in the patched output"
           fi
+
+      # awslogs-create-group can't set retention, so create the group with a retention policy first
+      - name: Set log retention
+        run: |
+          group="/ecs/${NAME_PREFIX}-task-definition-patch"
+          aws logs create-log-group --log-group-name "$group" 2>/dev/null || true
+          aws logs put-retention-policy --log-group-name "$group" --retention-in-days "$LOG_RETENTION_DAYS"
 
       - name: Register task definition
         id: register
@@ -604,6 +621,7 @@ jobs:
               NamePrefix="$NAME_PREFIX" \
               AppImagePath="$APP_IMAGE" \
               ExecutionRoleArn="${{ vars.TASK_EXECUTION_ROLE_ARN }}" \
+              LogRetentionDays="$LOG_RETENTION_DAYS" \
             --tags sample=04-cloudformation-patch
           arn="$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
             --query "Stacks[0].Outputs[?OutputKey=='TaskDefinitionArn'].OutputValue" --output text)"
@@ -691,6 +709,13 @@ jobs:
       - name: Push patched image
         if: steps.image.outputs.prebuilt != 'true'
         run: docker push --quiet "${{ steps.image.outputs.uri }}"
+
+      # awslogs-create-group can't set retention, so create the group with a retention policy first
+      - name: Set log retention
+        run: |
+          group="/ecs/${NAME_PREFIX}-detection-container"
+          aws logs create-log-group --log-group-name "$group" 2>/dev/null || true
+          aws logs put-retention-policy --log-group-name "$group" --retention-in-days "$LOG_RETENTION_DAYS"
 
       - name: Register task definition
         id: register

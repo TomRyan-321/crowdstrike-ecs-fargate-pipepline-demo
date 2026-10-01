@@ -100,6 +100,7 @@ Confirm with the human before you delete stacks, repositories or buckets.
 - **The sample app pins slightly outdated versions on purpose,** so the image assessment has findings to show. Don't "fix" them unless the human asks.
 - **Scans warn rather than block** unless the `ENFORCE_SCAN_RESULTS` repository variable is `true`.
 - **The Terraform module (v0.0.2) doesn't create the `/tmp/CrowdStrike-private` volume,** which a read-only root filesystem requires. That's why sample 02 keeps the root filesystem writable.
+- **Log groups expire after 7 days** (`LOG_RETENTION_DAYS`). Samples 01 and 03 and the detection container use `awslogs-create-group`, which can't set retention, so their jobs create the group with a retention policy before ECS writes to it. Keep that step if you add new task definitions.
 - **The detection container image is cached in ECR** under `<sensor version>-<hash of the sensor tags>`. Changing the tags or the sensor version triggers a fresh patch.
 
 ## Changing the repository

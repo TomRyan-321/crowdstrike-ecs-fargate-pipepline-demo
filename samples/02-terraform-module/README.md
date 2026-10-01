@@ -77,6 +77,7 @@ The pipeline's `sample-02-terraform-module` job runs `terraform init` (with the 
 - **Entrypoint and command:** set `app_entrypoint` and `app_command` to your image's `ENTRYPOINT` and `CMD`; this sample uses `["python"]` and `["app.py"]`. The module wraps the entrypoint with the Falcon launcher. If you leave it unset, the module relies on the sensor discovering the image's default entrypoint, which is less reliable.
 - **Sensor options:** `falcon_additional_opts` is appended to `FALCONCTL_OPTS` after `--cid`. This sample passes `--tags=<falcon_sensor_tags>`, which is CrowdStrike's documented way to set sensor grouping tags.
 - **Read-only root filesystem:** with `readonlyRootFilesystem: true`, the sensor needs a writable `/tmp/CrowdStrike-private` volume in each container. The module (v0.0.2) doesn't create one, so this sample keeps the root filesystem writable.
+- **Log retention:** the module creates the log group with `log_retention_days`, which this sample sets to 7 by default.
 - **Execution role:** the sample passes in an existing role (`create_execution_role = false`). The module can also create one for you.
 - **Sizing:** the init container reserves 256 CPU units and 512 MiB while it runs (`falcon_init_cpu`, `falcon_init_memory`), so size the task for that on top of your app.
 - **ARM64:** set `runtime_platform = { cpu_architecture = "ARM64" }`. The module switches the loader path automatically, and the mirrored sensor image is multi-architecture.
