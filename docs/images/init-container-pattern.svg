@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 650" width="1200" height="650" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">
+  <title>Falcon Container sensor on ECS Fargate: init container pattern</title>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#3D474F"/>
+    </marker>
+    <style>
+      .mono { font-family: 'SF Mono', Consolas, 'Liberation Mono', monospace; }
+      .h { font-weight: 700; }
+      .muted { fill: #3D474F; }
+      .line { fill: none; stroke: #3D474F; stroke-width: 2; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect width="1200" height="650" rx="16" fill="#FFFFFF"/>
+
+  <text x="40" y="52" font-size="26" class="h" fill="#000">Init container pattern</text>
+  <text x="40" y="80" font-size="15" class="muted">Samples 02, 03 and 04 · your application image is unchanged; Falcon is added to the task definition</text>
+  <rect x="40" y="94" width="64" height="4" fill="#EC0000"/>
+
+  <!-- Amazon ECR -->
+  <rect x="40" y="180" width="210" height="250" rx="10" fill="#F8F8F8" stroke="#A7A9AC"/>
+  <text x="60" y="212" font-size="16" class="h" fill="#000">Amazon ECR</text>
+  <rect x="58" y="232" width="174" height="72" rx="8" fill="#FFFFFF" stroke="#EC0000" stroke-width="1.5"/>
+  <text x="72" y="261" font-size="14" class="h mono" fill="#000">falcon-container</text>
+  <text x="72" y="284" font-size="12" class="muted">mirrored sensor image</text>
+  <rect x="58" y="322" width="174" height="72" rx="8" fill="#FFFFFF" stroke="#000" stroke-width="1.5"/>
+  <text x="72" y="351" font-size="14" class="h mono" fill="#000">app</text>
+  <text x="72" y="374" font-size="12" class="muted">your unmodified image</text>
+
+  <!-- Task boundary -->
+  <rect x="300" y="130" width="660" height="470" rx="14" fill="none" stroke="#A7A9AC" stroke-width="2" stroke-dasharray="7 5"/>
+  <text x="322" y="162" font-size="16" class="h" fill="#000">ECS Fargate task</text>
+
+  <!-- 1. Init container -->
+  <rect x="330" y="185" width="270" height="115" rx="10" fill="#EC0000"/>
+  <circle cx="354" cy="212" r="12" fill="#FFFFFF"/>
+  <text x="354" y="217" font-size="14" class="h" fill="#EC0000" text-anchor="middle">1</text>
+  <text x="376" y="218" font-size="16" class="h" fill="#FFFFFF">Falcon init container</text>
+  <text x="350" y="248" font-size="11" class="mono" fill="#FFFFFF">crowdstrike-falcon-init-container</text>
+  <text x="350" y="270" font-size="13" fill="#FFFFFF">essential: false · runs to completion</text>
+  <text x="350" y="290" font-size="13" fill="#FFFFFF">copies the sensor into the volume</text>
+
+  <!-- Shared volume -->
+  <rect x="660" y="185" width="270" height="115" rx="10" fill="#FDE8E8" stroke="#EC0000" stroke-width="1.5"/>
+  <text x="680" y="218" font-size="16" class="h" fill="#000">Shared volume</text>
+  <text x="680" y="246" font-size="13" class="mono" fill="#000">crowdstrike-falcon-volume</text>
+  <text x="680" y="268" font-size="13" class="mono" fill="#000">/tmp/CrowdStrike</text>
+  <text x="680" y="290" font-size="13" class="muted">sensor binaries and libraries</text>
+
+  <path class="line" d="M600 242 L654 242"/>
+  <text x="627" y="234" font-size="12" class="muted" text-anchor="middle">copy</text>
+
+  <!-- 2. Application container -->
+  <rect x="330" y="360" width="600" height="212" rx="10" fill="#FFFFFF" stroke="#000" stroke-width="2"/>
+  <circle cx="354" cy="388" r="12" fill="#000"/>
+  <text x="354" y="393" font-size="14" class="h" fill="#FFFFFF" text-anchor="middle">2</text>
+  <text x="376" y="394" font-size="16" class="h" fill="#000">Application container</text>
+  <text x="910" y="394" font-size="12" class="muted" text-anchor="end">dependsOn: init container COMPLETE</text>
+
+  <rect x="350" y="414" width="250" height="62" rx="8" fill="#EC0000"/>
+  <text x="366" y="440" font-size="15" class="h" fill="#FFFFFF">Falcon Container sensor</text>
+  <text x="366" y="462" font-size="12" fill="#FFFFFF">starts first via entrypoint-ecs.sh</text>
+  <path class="line" d="M475 476 L475 494"/>
+  <rect x="350" y="498" width="250" height="56" rx="8" fill="#000"/>
+  <text x="366" y="522" font-size="15" class="h" fill="#FFFFFF">Your app</text>
+  <text x="366" y="543" font-size="12" class="mono" fill="#F8F8F8">python app.py</text>
+
+  <text x="625" y="430" font-size="12" class="h muted">Added to the container definition</text>
+  <text x="625" y="456" font-size="11" class="mono" fill="#000"><tspan font-weight="700">entryPoint</tspan><tspan x="735">entrypoint-ecs.sh + app</tspan></text>
+  <text x="625" y="480" font-size="11" class="mono" fill="#000"><tspan font-weight="700">FALCONCTL_OPTS</tspan><tspan x="735">--cid=&lt;CID&gt; --tags=&lt;tags&gt;</tspan></text>
+  <text x="625" y="504" font-size="11" class="mono" fill="#000"><tspan font-weight="700">capabilities</tspan><tspan x="735">SYS_PTRACE</tspan></text>
+  <text x="625" y="528" font-size="11" class="mono" fill="#000"><tspan font-weight="700">mountPoints</tspan><tspan x="735">/tmp/CrowdStrike</tspan></text>
+
+  <path class="line" d="M795 300 L795 355"/>
+  <text x="805" y="333" font-size="12" class="muted">mounted</text>
+
+  <!-- Image pulls -->
+  <path class="line" d="M232 268 L280 268 L280 242 L325 242"/>
+  <path class="line" d="M232 358 L280 358 L280 445 L325 445"/>
+
+  <!-- CrowdStrike cloud -->
+  <rect x="992" y="390" width="178" height="112" rx="14" fill="#000"/>
+  <text x="1081" y="432" font-size="16" class="h" fill="#FFFFFF" text-anchor="middle">CrowdStrike</text>
+  <text x="1081" y="454" font-size="16" class="h" fill="#FFFFFF" text-anchor="middle">Falcon cloud</text>
+  <text x="1081" y="480" font-size="12" fill="#A7A9AC" text-anchor="middle">telemetry · detections</text>
+  <path class="line" d="M930 446 L986 446"/>
+
+  <text x="40" y="630" font-size="13" class="muted">With readonlyRootFilesystem: true, the patching utility also adds a writable /tmp/CrowdStrike-private volume for each container.</text>
+</svg>

@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CrowdStrike Falcon on ECS Fargate</title>
+  <style>
+    :root {
+      --crwd-red: #EC0000;
+      --crwd-red-dark: #B52026;
+      --crwd-black: #000000;
+      --crwd-storm: #A7A9AC;
+      --crwd-cloud: #F8F8F8;
+      --crwd-deep-sea: #3D474F;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: var(--crwd-black);
+      color: var(--crwd-cloud);
+      font-family: Inter, system-ui, sans-serif;
+    }
+    main {
+      max-width: 40rem;
+      padding: 3rem;
+      border-top: 6px solid var(--crwd-red);
+    }
+    h1 { font-weight: 700; font-size: 2rem; margin: 0 0 1rem; }
+    h1 span { color: var(--crwd-red); }
+    p { line-height: 1.6; color: var(--crwd-storm); }
+    dl { display: grid; grid-template-columns: max-content 1fr; gap: .5rem 1.5rem; margin-top: 2rem; }
+    dt { color: var(--crwd-storm); }
+    dd { margin: 0; font-family: "SF Mono", Consolas, monospace; color: var(--crwd-cloud); }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Protected by <span>CrowdStrike Falcon</span></h1>
+    <p>This sample application runs on Amazon ECS Fargate with the Falcon Container sensor providing runtime protection.</p>
+    <dl>
+      <dt>Deployment sample</dt><dd>{{ sample }}</dd>
+      <dt>Task hostname</dt><dd>{{ hostname }}</dd>
+    </dl>
+  </main>
+</body>
+</html>

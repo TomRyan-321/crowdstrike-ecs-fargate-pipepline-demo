@@ -1,0 +1,10 @@
+# Intentionally a little behind current releases (a handful of known CVEs) so the Falcon image
+# assessment has findings to show. Bump to the latest versions for anything real.
+Flask==3.0.3
+Werkzeug==3.0.6
+Jinja2==3.1.5
+MarkupSafe==2.1.5
+itsdangerous==2.2.0
+click==8.1.7
+blinker==1.8.2
+waitress==3.0.0
