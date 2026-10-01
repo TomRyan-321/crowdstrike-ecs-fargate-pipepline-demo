@@ -148,7 +148,7 @@ AWS access uses **GitHub OIDC**, so no long-lived AWS keys are stored in GitHub.
 # Optional overrides: AWS_REGION (default us-west-2), FALCON_CLOUD (default us-1),
 # NAME_PREFIX (default ecs-fargate-demo), REVIEWER (default: your gh login),
 # FALCON_SENSOR_TAGS (comma-separated sensor grouping tags, default none)
-FALCON_SENSOR_TAGS=cs-myteam-ecs-demo bootstrap/setup.sh <owner>/<repo>
+FALCON_SENSOR_TAGS=ecs-fargate-demo bootstrap/setup.sh <owner>/<repo>
 ```
 
 [`bootstrap/setup.sh`](bootstrap/setup.sh) does three things:
@@ -195,7 +195,7 @@ Sensor grouping tags let you target these containers with Falcon host groups and
 All of them follow CrowdStrike's documented method and pass tags as the `falconctl --tags` option. To change the tags:
 
 ```bash
-gh variable set FALCON_SENSOR_TAGS --body "cs-myteam-ecs-demo,production"
+gh variable set FALCON_SENSOR_TAGS --body "ecs-fargate-demo,production"
 ```
 
 ## Repository layout

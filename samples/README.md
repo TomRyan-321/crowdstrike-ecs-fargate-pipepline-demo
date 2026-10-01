@@ -37,7 +37,7 @@ Run these in the shell you'll use for the samples. The commands read the client 
 export AWS_REGION=us-west-2
 export NAME_PREFIX=ecs-fargate-demo                 # matches the bootstrap stack; change if you use your own names
 export FALCON_CLOUD=us-1                             # us-1 | us-2 | eu-1 | us-gov-1 | us-gov-2
-export FALCON_SENSOR_TAGS=cs-myteam-ecs-demo         # optional sensor grouping tags (comma-separated)
+export FALCON_SENSOR_TAGS=ecs-fargate-demo         # optional sensor grouping tags (comma-separated)
 export FALCON_CLIENT_ID="<your API client ID>"
 read -rsp "Falcon client secret: " FALCON_CLIENT_SECRET && export FALCON_CLIENT_SECRET && echo
 
