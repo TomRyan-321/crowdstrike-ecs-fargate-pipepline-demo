@@ -42,7 +42,7 @@ module "falcon_ecs_task" {
   execution_role_arn    = var.execution_role_arn
 
   log_group_name     = "/ecs/${var.name_prefix}-terraform-module"
-  log_retention_days = 30
+  log_retention_days = var.log_retention_days
 
   tags = var.tags
 }

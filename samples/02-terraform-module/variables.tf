@@ -37,6 +37,12 @@ variable "execution_role_arn" {
   description = "ARN of an existing ECS task execution role"
 }
 
+variable "log_retention_days" {
+  type        = number
+  description = "CloudWatch Logs retention for the application log group"
+  default     = 7
+}
+
 variable "tags" {
   type        = map(string)
   description = "Tags applied to all resources"

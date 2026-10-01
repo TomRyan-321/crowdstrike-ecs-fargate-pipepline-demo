@@ -83,6 +83,8 @@ The CID is redacted and ECR hostnames are shortened, so the summary doesn't expo
 
 The sample app deliberately pins slightly older releases, so the image assessment has real findings to report: the `python:3.12.7-alpine3.20` base image, plus Flask, Werkzeug, Jinja2, waitress and click. See [`app/requirements.txt`](app/requirements.txt). Update them to current releases before you reuse the app. All scanning in this repository uses CrowdStrike Falcon Cloud Security.
 
+All log groups the samples write to keep logs for **7 days** (`LOG_RETENTION_DAYS` in the workflow), so nothing accumulates storage costs. ECR repositories keep only their most recent images.
+
 By default, failed scans add a warning and the pipeline keeps going. To block the pipeline on failed scans (the IaC `fail_on` thresholds or the Image Assessment policy), set:
 
 ```bash

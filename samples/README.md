@@ -114,7 +114,15 @@ You're now ready for any of the samples.
 
 ## Running and verifying a protected task
 
-The samples only register task definitions. To start one, you need a cluster and a subnet with outbound internet access. The bootstrap creates both: a cluster that defaults to Fargate Spot, and public subnets whose security group has no inbound rules.
+The samples only register task definitions. Before running one, give its log group a retention policy. Samples 01 and 03 and the detection container use `awslogs-create-group`, which creates groups that keep logs forever. Samples 02 and 04 already set 7 days.
+
+```bash
+LOG_GROUP=/ecs/$NAME_PREFIX-task-definition-patch      # or -patched-image, -detection-container
+aws logs create-log-group --log-group-name "$LOG_GROUP" 2>/dev/null || true
+aws logs put-retention-policy --log-group-name "$LOG_GROUP" --retention-in-days 7
+```
+
+To start a task, you need a cluster and a subnet with outbound internet access. The bootstrap creates both: a cluster that defaults to Fargate Spot, and public subnets whose security group has no inbound rules.
 
 ```bash
 out() { aws cloudformation describe-stacks --stack-name ecs-fargate-demo-bootstrap \

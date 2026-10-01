@@ -46,6 +46,10 @@ If you didn't run the bootstrap, create the repository first with `aws ecr creat
 ### 2. Register and run the task
 
 ```bash
+# Create the log group with a retention policy first; awslogs-create-group would keep logs forever
+aws logs create-log-group --log-group-name "/ecs/$NAME_PREFIX-detection-container" 2>/dev/null || true
+aws logs put-retention-policy --log-group-name "/ecs/$NAME_PREFIX-detection-container" --retention-in-days 7
+
 envsubst '${NAME_PREFIX} ${DETECTION_IMAGE} ${AWS_REGION} ${TASK_EXECUTION_ROLE_ARN}' \
   < demo/detection-container/taskdefinition.json > /tmp/detection-container.json
 TASK_DEF=$(aws ecs register-task-definition --cli-input-json file:///tmp/detection-container.json \
