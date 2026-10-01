@@ -55,7 +55,7 @@ env:
   AWS_REGION: ${{ vars.AWS_REGION }}
   NAME_PREFIX: ${{ vars.NAME_PREFIX }}
   FALCON_CLOUD: ${{ vars.FALCON_CLOUD }}
-  # Sensor grouping tags (comma-separated) applied by every sample, e.g. cs-myteam-ecs-demo
+  # Sensor grouping tags (comma-separated) applied by every sample, e.g. ecs-fargate-demo
   FALCON_SENSOR_TAGS: ${{ vars.FALCON_SENSOR_TAGS }}
   FALCON_SCRIPTS_VERSION: v1.14.0
   SUMMARY: python3 .github/scripts/summary.py

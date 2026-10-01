@@ -94,7 +94,7 @@ The pipeline's `sample-01-patched-image` job runs the same steps with [`crowdstr
     source_image_uri: <account>.dkr.ecr.<region>.amazonaws.com/app:<tag>
     target_image_uri: <account>.dkr.ecr.<region>.amazonaws.com/app-falcon-patched:<tag>
     cloud_service: ECS_FARGATE
-    falconctl_opts: --tags=cs-myteam-ecs-demo   # sensor grouping tags
+    falconctl_opts: --tags=ecs-fargate-demo   # sensor grouping tags
     image_pull_policy: IfNotPresent
   env:
     FALCON_CLIENT_SECRET: ${{ secrets.FALCON_CLIENT_SECRET }}

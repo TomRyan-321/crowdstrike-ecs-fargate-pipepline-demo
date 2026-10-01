@@ -28,7 +28,7 @@ variable "falcon_cid" {
 
 variable "falcon_sensor_tags" {
   type        = string
-  description = "Comma-separated Falcon sensor grouping tags, e.g. \"cs-myteam-ecs-demo\" (empty for none)"
+  description = "Comma-separated Falcon sensor grouping tags, e.g. \"ecs-fargate-demo\" (empty for none)"
   default     = ""
 }
 

@@ -55,7 +55,7 @@ aws sts get-caller-identity
 gh auth status
 
 # 1. Bootstrap AWS and GitHub (idempotent; safe to re-run)
-AWS_REGION=us-west-2 FALCON_CLOUD=us-1 FALCON_SENSOR_TAGS=cs-myteam-ecs-demo \
+AWS_REGION=us-west-2 FALCON_CLOUD=us-1 FALCON_SENSOR_TAGS=ecs-fargate-demo \
   bootstrap/setup.sh <owner>/<repo>
 
 # 2. The human sets the three Falcon secrets (see above)
