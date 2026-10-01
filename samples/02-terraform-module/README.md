@@ -11,7 +11,7 @@
 
 You describe your application container, and the module adds the Falcon pieces.
 
-Sensor grouping tags come from `falcon_sensor_tags`, which this sample sets as the `FALCONCTL_OPT_TAGS` environment variable on the app container.
+Sensor grouping tags come from `falcon_sensor_tags`. The sample passes them to the module as `falcon_additional_opts = "--tags=..."`, and the module appends that to `FALCONCTL_OPTS` after the CID.
 
 The root filesystem stays writable here. With a read-only root filesystem, the sensor also needs a per-container `/tmp/CrowdStrike-private` volume, and the module doesn't create one yet.
 

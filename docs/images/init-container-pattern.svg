@@ -67,11 +67,10 @@
   <text x="366" y="543" font-size="12" class="mono" fill="#F8F8F8">python app.py</text>
 
   <text x="625" y="430" font-size="12" class="h muted">Added to the container definition</text>
-  <text x="625" y="452" font-size="11" class="mono" fill="#000"><tspan font-weight="700">entryPoint</tspan><tspan x="755">entrypoint-ecs.sh + app</tspan></text>
-  <text x="625" y="474" font-size="11" class="mono" fill="#000"><tspan font-weight="700">FALCONCTL_OPTS</tspan><tspan x="755">--cid=&lt;CID&gt;</tspan></text>
-  <text x="625" y="496" font-size="11" class="mono" fill="#000"><tspan font-weight="700">FALCONCTL_OPT_TAGS</tspan><tspan x="755">&lt;sensor grouping tags&gt;</tspan></text>
-  <text x="625" y="518" font-size="11" class="mono" fill="#000"><tspan font-weight="700">capabilities</tspan><tspan x="755">SYS_PTRACE</tspan></text>
-  <text x="625" y="540" font-size="11" class="mono" fill="#000"><tspan font-weight="700">mountPoints</tspan><tspan x="755">/tmp/CrowdStrike</tspan></text>
+  <text x="625" y="456" font-size="11" class="mono" fill="#000"><tspan font-weight="700">entryPoint</tspan><tspan x="735">entrypoint-ecs.sh + app</tspan></text>
+  <text x="625" y="480" font-size="11" class="mono" fill="#000"><tspan font-weight="700">FALCONCTL_OPTS</tspan><tspan x="735">--cid=&lt;CID&gt; --tags=&lt;tags&gt;</tspan></text>
+  <text x="625" y="504" font-size="11" class="mono" fill="#000"><tspan font-weight="700">capabilities</tspan><tspan x="735">SYS_PTRACE</tspan></text>
+  <text x="625" y="528" font-size="11" class="mono" fill="#000"><tspan font-weight="700">mountPoints</tspan><tspan x="735">/tmp/CrowdStrike</tspan></text>
 
   <path class="line" d="M795 300 L795 355"/>
   <text x="805" y="333" font-size="12" class="muted">mounted</text>

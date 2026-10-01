@@ -64,7 +64,7 @@ Each run's **Summary** page is written to be presented as-is, from top to bottom
 4. **One card per sample,** all built from the task definition that ECS actually registered, so the four methods can be compared directly:
    - The containers and their start order, including the Falcon init container where one is used.
    - How each application container launches, for example `Falcon wrapper → python app.py`.
-   - The Falcon settings: `SYS_PTRACE`, the sensor volume mounts and the sensor configuration (`FALCONCTL_OPTS`, `FALCONCTL_OPT_TAGS`).
+   - The Falcon settings: `SYS_PTRACE`, the sensor volume mounts and the sensor configuration (`FALCONCTL_OPTS` with the CID and tags).
    - A link to the task definition in the AWS console.
    - For sample 01, a before and after view of the image's entrypoint and environment.
 
@@ -155,7 +155,7 @@ Push to `main`, or start **Actions > CrowdStrike Falcon ECS Fargate samples > Ru
 - **Sizing:** the Terraform module gives the init container 256 CPU units and 512 MiB by default, so the init container samples use a 512 CPU / 1024 MiB task.
 - **Architecture:** all samples target `X86_64`. For Graviton, set the task's `cpuArchitecture` to `ARM64`, and also set `falcon_image_platform: aarch64` for falconutil. The mirrored sensor image already includes both architectures.
 - **Read-only root filesystem:** samples 03 and 04 set `readonlyRootFilesystem: true`. In that case the patching utility also adds a writable `/tmp/CrowdStrike-private` volume to each container. The Terraform module (v0.0.2) doesn't add that volume, so sample 02 keeps the root filesystem writable.
-- **Other sensor options:** set them the same way as tags. Use `-falconctl-opts "--tags=... --billing=metered"` with the utilities, or add more `FALCONCTL_OPT_*` environment variables (for example `FALCONCTL_OPT_BILLING`) in Terraform.
+- **Other sensor options:** set them the same way as tags. Use `-falconctl-opts "--tags=... --billing=metered"` with the utilities, or `falcon_additional_opts` in Terraform.
 
 ## Sensor grouping tags
 
@@ -164,10 +164,10 @@ Sensor grouping tags let you target these containers with Falcon host groups and
 | Sample | How the tags are set | Resulting setting |
 |--------|----------------------|-------------------|
 | 01 falconutil patch-image | `falconctl_opts: --tags=<tags>` on `falconutil-action` | Built into the patched image |
-| 02 Terraform module | `falcon_sensor_tags` variable, added as an app container environment variable | `FALCONCTL_OPT_TAGS=<tags>` |
-| 03 / 04 patching utility | `-falconctl-opts "--tags=<tags>"` | Added to the patched task definition |
+| 02 Terraform module | `falcon_additional_opts = "--tags=<tags>"` (from the `falcon_sensor_tags` variable) | `FALCONCTL_OPTS=--cid=<CID> --tags=<tags>` |
+| 03 / 04 patching utility | `-falconctl-opts "--tags=<tags>"` | `FALCONCTL_OPTS=--tags=<tags> --cid=<CID>` |
 
-`FALCONCTL_OPT_TAGS` is the environment variable form of `falconctl --tags`. Each variable in the `FALCONCTL_OPT_*` family maps to one `falconctl` option. To change the tags:
+All four samples follow CrowdStrike's documented method and pass tags as the `falconctl --tags` option. For the init container samples, the option ends up in the application container's `FALCONCTL_OPTS` environment variable. To change the tags:
 
 ```bash
 gh variable set FALCON_SENSOR_TAGS --body "cs-myteam-ecs-demo,production"

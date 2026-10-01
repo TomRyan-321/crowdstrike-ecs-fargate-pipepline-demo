@@ -18,21 +18,12 @@ module "falcon_ecs_task" {
     }
   ]
 
-  # FALCONCTL_OPT_TAGS is the environment variable form of falconctl --tags (sensor grouping tags)
-  app_environment = concat(
-    [
-      {
-        name  = "DEMO_SAMPLE"
-        value = "02-terraform-module"
-      }
-    ],
-    var.falcon_sensor_tags != "" ? [
-      {
-        name  = "FALCONCTL_OPT_TAGS"
-        value = var.falcon_sensor_tags
-      }
-    ] : []
-  )
+  app_environment = [
+    {
+      name  = "DEMO_SAMPLE"
+      value = "02-terraform-module"
+    }
+  ]
 
   # Left writable: with a read-only root filesystem the sensor also needs a per-container
   # /tmp/CrowdStrike-private volume, which the module (v0.0.2) does not create.
@@ -40,6 +31,9 @@ module "falcon_ecs_task" {
 
   falcon_image = var.falcon_image
   falcon_cid   = var.falcon_cid
+
+  # Appended to FALCONCTL_OPTS after --cid, the same place the patching utility puts falconctl options
+  falcon_additional_opts = var.falcon_sensor_tags != "" ? "--tags=${var.falcon_sensor_tags}" : ""
 
   task_cpu    = "512"
   task_memory = "1024"
