@@ -122,7 +122,11 @@ jobs:
     name: Build, scan and push image
     needs: iac-scan
     runs-on: ubuntu-latest
-    environment: ${{ github.ref == 'refs/heads/main' && 'aws-main' || 'aws-approval' }}
+    # deployment: false keeps the approval gate and the OIDC environment claim without creating
+    # GitHub deployment records; parallel jobs waiting on deployment records can't be approved.
+    environment:
+      name: ${{ github.ref == 'refs/heads/main' && 'aws-main' || 'aws-approval' }}
+      deployment: false
     permissions:
       contents: read
       id-token: write
@@ -259,7 +263,9 @@ jobs:
     name: "01: falconutil patch-image"
     needs: build
     runs-on: ubuntu-latest
-    environment: ${{ github.ref == 'refs/heads/main' && 'aws-main' || 'aws-approval' }}
+    environment:
+      name: ${{ github.ref == 'refs/heads/main' && 'aws-main' || 'aws-approval' }}
+      deployment: false
     permissions:
       contents: read
       id-token: write
@@ -331,7 +337,9 @@ jobs:
     name: "02: Terraform module"
     needs: build
     runs-on: ubuntu-latest
-    environment: ${{ github.ref == 'refs/heads/main' && 'aws-main' || 'aws-approval' }}
+    environment:
+      name: ${{ github.ref == 'refs/heads/main' && 'aws-main' || 'aws-approval' }}
+      deployment: false
     permissions:
       contents: read
       id-token: write
@@ -389,7 +397,9 @@ jobs:
     name: "03: Task definition patch"
     needs: build
     runs-on: ubuntu-latest
-    environment: ${{ github.ref == 'refs/heads/main' && 'aws-main' || 'aws-approval' }}
+    environment:
+      name: ${{ github.ref == 'refs/heads/main' && 'aws-main' || 'aws-approval' }}
+      deployment: false
     permissions:
       contents: read
       id-token: write
@@ -473,7 +483,9 @@ jobs:
     name: "04: CloudFormation patch"
     needs: build
     runs-on: ubuntu-latest
-    environment: ${{ github.ref == 'refs/heads/main' && 'aws-main' || 'aws-approval' }}
+    environment:
+      name: ${{ github.ref == 'refs/heads/main' && 'aws-main' || 'aws-approval' }}
+      deployment: false
     permissions:
       contents: read
       id-token: write

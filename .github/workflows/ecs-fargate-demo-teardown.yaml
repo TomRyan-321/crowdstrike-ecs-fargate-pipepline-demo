@@ -23,7 +23,11 @@ jobs:
   teardown:
     name: Remove sample deployments
     runs-on: ubuntu-latest
-    environment: ${{ github.ref == 'refs/heads/main' && 'aws-main' || 'aws-approval' }}
+    # deployment: false keeps the approval gate and OIDC environment claim without creating a
+    # GitHub deployment record (parallel jobs waiting on one deployment environment can't be approved)
+    environment:
+      name: ${{ github.ref == 'refs/heads/main' && 'aws-main' || 'aws-approval' }}
+      deployment: false
     permissions:
       contents: read
       id-token: write
