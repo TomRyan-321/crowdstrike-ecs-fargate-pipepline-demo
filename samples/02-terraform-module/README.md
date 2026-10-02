@@ -4,6 +4,7 @@
 
 - the Falcon init container, `crowdstrike-falcon-init-container`, which copies the sensor into a shared volume and exits
 - the shared sensor volume, mounted at `/tmp/CrowdStrike` in your container
+- for a read-only root filesystem, a writable `crowdstrike-private-<app_name>` volume at `/tmp/CrowdStrike-private` (module v0.0.3 or later)
 - `dependsOn: COMPLETE`, so your container starts after the init container finishes
 - the Falcon entrypoint wrapper in front of your entrypoint
 - `FALCONCTL_OPTS` with your CID, plus any `falcon_additional_opts`, such as `--tags`
@@ -76,7 +77,7 @@ The pipeline's `sample-02-terraform-module` job runs `terraform init` (with the 
 
 - **Entrypoint and command:** set `app_entrypoint` and `app_command` to your image's `ENTRYPOINT` and `CMD`; this sample uses `["python"]` and `["app.py"]`. The module wraps the entrypoint with the Falcon launcher. If you leave it unset, the module relies on the sensor discovering the image's default entrypoint, which is less reliable.
 - **Sensor options:** `falcon_additional_opts` is appended to `FALCONCTL_OPTS` after `--cid`. This sample passes `--tags=<falcon_sensor_tags>`, which is CrowdStrike's documented way to set sensor grouping tags.
-- **Read-only root filesystem:** with `readonlyRootFilesystem: true`, the sensor needs a writable `/tmp/CrowdStrike-private` volume in each container. The module (v0.0.2) doesn't create one, so this sample keeps the root filesystem writable.
+- **Read-only root filesystem:** this sample sets `app_readonly_root_filesystem = true`. The sensor then needs a writable `/tmp/CrowdStrike-private` directory, so the module (v0.0.3 or later) adds a `crowdstrike-private-<app_name>` volume and the init container makes it writable. Earlier module versions fail at start-up with `mkdir: cannot create directory '/tmp/CrowdStrike-private': Read-only file system`.
 - **Log retention:** the module creates the log group with `log_retention_days`, which this sample sets to 7 by default.
 - **Execution role:** the sample passes in an existing role (`create_execution_role = false`). The module can also create one for you.
 - **Sizing:** the init container reserves 256 CPU units and 512 MiB while it runs (`falcon_init_cpu`, `falcon_init_memory`), so size the task for that on top of your app.

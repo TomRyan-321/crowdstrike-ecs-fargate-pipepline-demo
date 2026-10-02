@@ -86,5 +86,5 @@
   <text x="1081" y="480" font-size="12" fill="#A7A9AC" text-anchor="middle">telemetry · detections</text>
   <path class="line" d="M930 446 L986 446"/>
 
-  <text x="40" y="630" font-size="13" class="muted">With readonlyRootFilesystem: true, the patching utility also adds a writable /tmp/CrowdStrike-private volume for each container.</text>
+  <text x="40" y="630" font-size="13" class="muted">With readonlyRootFilesystem: true, the patching utility and the Terraform module also add a writable /tmp/CrowdStrike-private volume for each container.</text>
 </svg>
