@@ -99,7 +99,7 @@ Confirm with the human before you delete stacks, repositories or buckets.
 - **One approval per branch run.** The `build` job deliberately has no AWS access. Only the sample jobs and the detection container job use the gated environment, and they wait on it together. Don't add AWS steps to `build`.
 - **The sample app pins slightly outdated versions on purpose,** so the image assessment has findings to show. Don't "fix" them unless the human asks.
 - **Scans warn rather than block** unless the `ENFORCE_SCAN_RESULTS` repository variable is `true`.
-- **The Terraform module (v0.0.2) doesn't create the `/tmp/CrowdStrike-private` volume,** which a read-only root filesystem requires. That's why sample 02 keeps the root filesystem writable.
+- **Read-only root filesystems need a writable `/tmp/CrowdStrike-private` volume.** The patching utility (samples 03, 04) and the Terraform module from v0.0.3 (sample 02) add it. Don't pin sample 02 below v0.0.3.
 - **Log groups expire after 7 days** (`LOG_RETENTION_DAYS`). Samples 01 and 03 and the detection container use `awslogs-create-group`, which can't set retention, so their jobs create the group with a retention policy before ECS writes to it. Keep that step if you add new task definitions.
 - **The detection container image is cached in ECR** under `<sensor version>-<hash of the sensor tags>`. Changing the tags or the sensor version triggers a fresh patch.
 

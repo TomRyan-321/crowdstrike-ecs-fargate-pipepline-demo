@@ -181,7 +181,7 @@ Push to `main`, or start **Actions â†’ CrowdStrike Falcon ECS Fargate samples â†
 - **Entrypoint and command:** the Falcon wrapper must launch your application's real entrypoint. The patching utility reads it from the image when the task definition does not set one. The Terraform module needs it explicitly (`app_entrypoint` / `app_command`). This app uses `ENTRYPOINT ["python"]` and `CMD ["app.py"]`.
 - **Sizing:** the Terraform module gives the init container 256 CPU units and 512 MiB by default, so the init container samples use a 512 CPU / 1024 MiB task.
 - **Architecture:** all samples target `X86_64`. For Graviton, set the task's `cpuArchitecture` to `ARM64`, and also set `falcon_image_platform: aarch64` for falconutil. The mirrored sensor image already includes both architectures.
-- **Read-only root filesystem:** samples 03 and 04 set `readonlyRootFilesystem: true`. In that case the patching utility also adds a writable `/tmp/CrowdStrike-private` volume to each container. The Terraform module (v0.0.2) doesn't add that volume, so sample 02 keeps the root filesystem writable.
+- **Read-only root filesystem:** samples 02, 03 and 04 set `readonlyRootFilesystem: true`. The sensor then needs a writable `/tmp/CrowdStrike-private` volume in each container. The patching utility and the Terraform module (v0.0.3 or later) both add it automatically.
 - **Other sensor options:** set them the same way as tags. Use `-falconctl-opts "--tags=... --billing=metered"` with the utilities, or `falcon_additional_opts` in Terraform.
 
 ## Sensor grouping tags

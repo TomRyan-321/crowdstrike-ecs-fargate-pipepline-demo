@@ -1,7 +1,7 @@
 # The CrowdStrike module builds a Fargate task definition with the Falcon init container,
 # shared volume, entrypoint wrapper, FALCONCTL_OPTS and SYS_PTRACE added for you.
 module "falcon_ecs_task" {
-  source = "github.com/CrowdStrike/terraform-aws-ecs-fargate?ref=v0.0.2"
+  source = "github.com/CrowdStrike/terraform-aws-ecs-fargate?ref=v0.0.3"
 
   app_name  = "${var.name_prefix}-terraform-module"
   app_image = var.app_image
@@ -25,9 +25,8 @@ module "falcon_ecs_task" {
     }
   ]
 
-  # Left writable: with a read-only root filesystem the sensor also needs a per-container
-  # /tmp/CrowdStrike-private volume, which the module (v0.0.2) does not create.
-  app_readonly_root_filesystem = false
+  # The module adds the writable /tmp/CrowdStrike-private volume the sensor needs (v0.0.3+)
+  app_readonly_root_filesystem = true
 
   falcon_image = var.falcon_image
   falcon_cid   = var.falcon_cid
